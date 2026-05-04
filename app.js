@@ -17,18 +17,53 @@ const els = {
 
 const detector = new FaceAlgorithm();
 const ctx = els.overlay.getContext("2d");
-const app = { running: false, stream: null, raf: 0, frame: 0, lastVideoTime: -1, faces: [], events: [] };
-const cfg = { model: "detector", smoothFactor: 0.45, minConfidence: 0.45, ttlMs: 260, detectEveryNFrames: 1 };
+const app = {
+  running: false,
+  starting: false,
+  stream: null,
+  raf: 0,
+  frame: 0,
+  lastVideoTime: -1,
+  faces: [],
+  events: []
+};
+const cfg = {
+  model: "detector",
+  smoothFactor: 0.45,
+  minConfidence: 0.45,
+  ttlMs: 260,
+  detectEveryNFrames: 1
+};
 
-function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-function saveCfg() { localStorage.setItem("face_tracker_cn_v1", JSON.stringify(cfg)); }
-function loadCfg() { try { Object.assign(cfg, JSON.parse(localStorage.getItem("face_tracker_cn_v1") || "{}")); } catch {} }
-function updateModelButton() { els.modelBtn.textContent = `模式：${cfg.model === "detector" ? "检测器" : "关键点"}`; }
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function saveCfg() {
+  localStorage.setItem("face_tracker_cn_v1", JSON.stringify(cfg));
+}
+
+function loadCfg() {
+  try {
+    Object.assign(cfg, JSON.parse(localStorage.getItem("face_tracker_cn_v1") || "{}"));
+  } catch {
+    // ignore invalid local storage data
+  }
+}
+
+function setStatus(text) {
+  els.statusText.textContent = text;
+}
+
+function updateModelButton() {
+  els.modelBtn.textContent = `模式：${cfg.model === "detector" ? "检测器" : "关键点"}`;
+}
 
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
-  const r = els.overlay.getBoundingClientRect();
-  const w = Math.floor(r.width * dpr), h = Math.floor(r.height * dpr);
+  const rect = els.overlay.getBoundingClientRect();
+  const w = Math.floor(rect.width * dpr);
+  const h = Math.floor(rect.height * dpr);
   if (els.overlay.width !== w || els.overlay.height !== h) {
     els.overlay.width = w;
     els.overlay.height = h;
@@ -36,24 +71,27 @@ function resizeCanvas() {
   }
 }
 
-function quality(face) {
+function getQuality(face) {
   if (!face) return "未检测到人脸";
-  const area = (face.w * face.h) / ((els.video.videoWidth || 1) * (els.video.videoHeight || 1));
-  if (area < 0.03) return "距离偏远";
-  if (area > 0.7) return "距离过近";
+  const ratio = (face.w * face.h) / ((els.video.videoWidth || 1) * (els.video.videoHeight || 1));
+  if (ratio < 0.03) return "距离偏远";
+  if (ratio > 0.7) return "距离过近";
   return "稳定";
 }
 
-function render(faces) {
+function renderFaceBoxes(faces) {
   ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
   const sx = els.overlay.clientWidth / (els.video.videoWidth || 1);
   const sy = els.overlay.clientHeight / (els.video.videoHeight || 1);
-  for (const f of faces) {
-    const x = f.x * sx, y = f.y * sy, w = f.w * sx, h = f.h * sy;
-    const color = "rgba(0, 245, 130, 0.96)";
+  for (const face of faces) {
+    const x = face.x * sx;
+    const y = face.y * sy;
+    const w = face.w * sx;
+    const h = face.h * sy;
+    const green = "rgba(0,245,130,0.96)";
     ctx.lineWidth = 2.4;
-    ctx.strokeStyle = color;
-    ctx.shadowColor = color;
+    ctx.strokeStyle = green;
+    ctx.shadowColor = green;
     ctx.shadowBlur = 12;
     ctx.strokeRect(x, y, w, h);
     ctx.shadowBlur = 0;
@@ -62,7 +100,12 @@ function render(faces) {
 
 async function startCamera() {
   app.stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 60 } },
+    video: {
+      facingMode: "user",
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30, max: 60 }
+    },
     audio: false
   });
   els.video.srcObject = app.stream;
@@ -71,8 +114,16 @@ async function startCamera() {
 
 function stopCamera() {
   if (!app.stream) return;
-  app.stream.getTracks().forEach((t) => t.stop());
+  app.stream.getTracks().forEach((track) => track.stop());
   app.stream = null;
+}
+
+function renderStatus() {
+  els.metricsText.textContent = app.faces.length
+    ? `置信度 ${Math.round((app.faces[0].scoreAvg || 0) * 100)}%`
+    : "未检测到人脸";
+  els.qualityText.textContent = getQuality(app.faces[0]);
+  els.eventText.textContent = app.events.length ? app.events.join("，") : "无";
 }
 
 function loop(ts) {
@@ -81,93 +132,135 @@ function loop(ts) {
   resizeCanvas();
   if (els.video.currentTime === app.lastVideoTime) return;
   app.lastVideoTime = els.video.currentTime;
-  app.frame++;
+  app.frame += 1;
 
   if (app.frame % cfg.detectEveryNFrames === 0) {
-    const out = detector.detect(els.video, ts, {
+    const result = detector.detect(els.video, ts, {
       smoothFactor: cfg.smoothFactor,
       ttlMs: cfg.ttlMs,
       mode: "single",
       iouThreshold: 0.15,
       minBoxSize: 10
     });
-    app.faces = out.faces;
-    app.events = out.events;
-    if (detector.avgLatencyMs > 26) cfg.detectEveryNFrames = clamp(cfg.detectEveryNFrames + 1, 1, 3);
-    else if (detector.avgLatencyMs < 12) cfg.detectEveryNFrames = clamp(cfg.detectEveryNFrames - 1, 1, 3);
+    app.faces = result.faces;
+    app.events = result.events;
+
+    if (detector.avgLatencyMs > 26) {
+      cfg.detectEveryNFrames = clamp(cfg.detectEveryNFrames + 1, 1, 3);
+    } else if (detector.avgLatencyMs < 12) {
+      cfg.detectEveryNFrames = clamp(cfg.detectEveryNFrames - 1, 1, 3);
+    }
   }
 
-  render(app.faces);
-  els.metricsText.textContent = app.faces.length
-    ? `置信度 ${(app.faces[0].scoreAvg * 100).toFixed(0)}%`
-    : "未检测到人脸";
-  els.qualityText.textContent = quality(app.faces[0]);
-  els.eventText.textContent = app.events.length ? app.events.join("，") : "无";
+  renderFaceBoxes(app.faces);
+  renderStatus();
 }
 
 async function start() {
-  if (!window.isSecureContext) { els.statusText.textContent = "错误：需要 HTTPS 或 localhost"; return; }
-  if (!navigator.mediaDevices?.getUserMedia) { els.statusText.textContent = "错误：浏览器不支持摄像头"; return; }
+  if (app.running || app.starting) return;
+  if (!window.isSecureContext) {
+    setStatus("错误：需要 HTTPS 或 localhost");
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("错误：浏览器不支持摄像头");
+    return;
+  }
+
+  app.starting = true;
+  els.toggleBtn.disabled = true;
+
   try {
-    els.statusText.textContent = "加载模型中...";
+    setStatus("加载模型中...");
     detector.reset();
     detector.setMinConfidence(cfg.minConfidence);
-    await detector.load(cfg.model, (m) => (els.statusText.textContent = m));
-    els.statusText.textContent = "启动摄像头...";
+    await detector.load(cfg.model, (msg) => setStatus(msg));
+    setStatus("启动摄像头...");
     await startCamera();
+
     app.running = true;
     app.frame = 0;
     app.lastVideoTime = -1;
+    app.faces = [];
+    app.events = [];
+
     els.toggleBtn.textContent = "停止";
     els.shotBtn.disabled = false;
-    els.statusText.textContent = "追踪中";
+    setStatus("追踪中");
     app.raf = requestAnimationFrame(loop);
-  } catch (e) {
-    els.statusText.textContent = `启动失败：${e?.message || e}`;
+  } catch (err) {
+    setStatus(`启动失败：${err?.message || err}`);
+  } finally {
+    app.starting = false;
+    els.toggleBtn.disabled = false;
   }
 }
 
 function stop() {
+  if (!app.running && !app.starting) return;
   app.running = false;
+  app.starting = false;
   cancelAnimationFrame(app.raf);
   stopCamera();
   detector.reset();
   ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
   els.toggleBtn.textContent = "开始";
-  els.statusText.textContent = "已停止";
+  els.shotBtn.disabled = true;
+  setStatus("已停止");
 }
 
-function snapshot() {
+function takeSnapshot() {
   if (!els.video.videoWidth) return;
-  const c = document.createElement("canvas");
-  c.width = els.video.videoWidth;
-  c.height = els.video.videoHeight;
-  const cctx = c.getContext("2d");
-  cctx.save();
-  cctx.translate(c.width, 0);
-  cctx.scale(-1, 1);
-  cctx.drawImage(els.video, 0, 0, c.width, c.height);
-  cctx.restore();
-  cctx.drawImage(els.overlay, 0, 0, c.width, c.height);
-  c.toBlob((b) => {
-    if (!b) return;
+  const canvas = document.createElement("canvas");
+  canvas.width = els.video.videoWidth;
+  canvas.height = els.video.videoHeight;
+  const c = canvas.getContext("2d");
+  c.save();
+  c.translate(canvas.width, 0);
+  c.scale(-1, 1);
+  c.drawImage(els.video, 0, 0, canvas.width, canvas.height);
+  c.restore();
+  c.drawImage(els.overlay, 0, 0, canvas.width, canvas.height);
+  canvas.toBlob((blob) => {
+    if (!blob) return;
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(b);
+    a.href = URL.createObjectURL(blob);
     a.download = `截图-${Date.now()}.png`;
     a.click();
     URL.revokeObjectURL(a.href);
   });
 }
 
-function bind() {
-  els.toggleBtn.onclick = async () => { if (app.running) stop(); else await start(); };
-  els.modelBtn.onclick = () => { cfg.model = cfg.model === "detector" ? "landmarker" : "detector"; updateModelButton(); saveCfg(); };
-  els.toolsBtn.onclick = () => { els.toolsPanel.open = !els.toolsPanel.open; };
-  els.shotBtn.onclick = snapshot;
-  els.themeBtn.onclick = () => { document.body.dataset.theme = document.body.dataset.theme === "dark" ? "light" : "dark"; };
+function bindEvents() {
+  els.toggleBtn.onclick = async () => {
+    if (app.running) stop();
+    else await start();
+  };
+
+  els.modelBtn.onclick = () => {
+    if (app.running || app.starting) {
+      setStatus("请先停止，再切换模式");
+      return;
+    }
+    cfg.model = cfg.model === "detector" ? "landmarker" : "detector";
+    updateModelButton();
+    saveCfg();
+  };
+
+  els.toolsBtn.onclick = () => {
+    els.toolsPanel.open = !els.toolsPanel.open;
+  };
+
+  els.shotBtn.onclick = takeSnapshot;
+
+  els.themeBtn.onclick = () => {
+    document.body.dataset.theme = document.body.dataset.theme === "dark" ? "light" : "dark";
+  };
+
+  window.addEventListener("resize", resizeCanvas);
 }
 
 loadCfg();
 updateModelButton();
-bind();
-els.statusText.textContent = "待机";
+bindEvents();
+setStatus("待机");
