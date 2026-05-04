@@ -17,6 +17,7 @@ const els = {
 
 const detector = new FaceAlgorithm();
 const ctx = els.overlay.getContext("2d");
+
 const app = {
   running: false,
   starting: false,
@@ -27,6 +28,7 @@ const app = {
   faces: [],
   events: []
 };
+
 const cfg = {
   model: "detector",
   smoothFactor: 0.45,
@@ -47,7 +49,7 @@ function loadCfg() {
   try {
     Object.assign(cfg, JSON.parse(localStorage.getItem("face_tracker_cn_v1") || "{}"));
   } catch {
-    // ignore invalid local storage data
+    // 忽略损坏配置
   }
 }
 
@@ -62,11 +64,11 @@ function updateModelButton() {
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
   const rect = els.overlay.getBoundingClientRect();
-  const w = Math.floor(rect.width * dpr);
-  const h = Math.floor(rect.height * dpr);
-  if (els.overlay.width !== w || els.overlay.height !== h) {
-    els.overlay.width = w;
-    els.overlay.height = h;
+  const width = Math.floor(rect.width * dpr);
+  const height = Math.floor(rect.height * dpr);
+  if (els.overlay.width !== width || els.overlay.height !== height) {
+    els.overlay.width = width;
+    els.overlay.height = height;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 }
@@ -83,19 +85,31 @@ function renderFaceBoxes(faces) {
   ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
   const sx = els.overlay.clientWidth / (els.video.videoWidth || 1);
   const sy = els.overlay.clientHeight / (els.video.videoHeight || 1);
+
   for (const face of faces) {
     const x = face.x * sx;
     const y = face.y * sy;
     const w = face.w * sx;
     const h = face.h * sy;
-    const green = "rgba(0,245,130,0.96)";
+    const color = "rgba(0,245,130,0.96)";
     ctx.lineWidth = 2.4;
-    ctx.strokeStyle = green;
-    ctx.shadowColor = green;
+    ctx.strokeStyle = color;
+    ctx.shadowColor = color;
     ctx.shadowBlur = 12;
     ctx.strokeRect(x, y, w, h);
     ctx.shadowBlur = 0;
   }
+}
+
+function updateStatusPanel() {
+  if (app.faces.length > 0) {
+    const conf = Math.round((app.faces[0].scoreAvg || 0) * 100);
+    els.metricsText.textContent = `置信度 ${conf}%`;
+  } else {
+    els.metricsText.textContent = "未检测到人脸";
+  }
+  els.qualityText.textContent = getQuality(app.faces[0]);
+  els.eventText.textContent = app.events.length ? app.events.join("，") : "无";
 }
 
 async function startCamera() {
@@ -118,17 +132,10 @@ function stopCamera() {
   app.stream = null;
 }
 
-function renderStatus() {
-  els.metricsText.textContent = app.faces.length
-    ? `置信度 ${Math.round((app.faces[0].scoreAvg || 0) * 100)}%`
-    : "未检测到人脸";
-  els.qualityText.textContent = getQuality(app.faces[0]);
-  els.eventText.textContent = app.events.length ? app.events.join("，") : "无";
-}
-
 function loop(ts) {
   if (!app.running) return;
   app.raf = requestAnimationFrame(loop);
+
   resizeCanvas();
   if (els.video.currentTime === app.lastVideoTime) return;
   app.lastVideoTime = els.video.currentTime;
@@ -153,7 +160,7 @@ function loop(ts) {
   }
 
   renderFaceBoxes(app.faces);
-  renderStatus();
+  updateStatusPanel();
 }
 
 async function start() {
@@ -175,6 +182,7 @@ async function start() {
     detector.reset();
     detector.setMinConfidence(cfg.minConfidence);
     await detector.load(cfg.model, (msg) => setStatus(msg));
+
     setStatus("启动摄像头...");
     await startCamera();
 
@@ -204,9 +212,12 @@ function stop() {
   stopCamera();
   detector.reset();
   ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
+  app.faces = [];
+  app.events = [];
   els.toggleBtn.textContent = "开始";
   els.shotBtn.disabled = true;
   setStatus("已停止");
+  updateStatusPanel();
 }
 
 function takeSnapshot() {
@@ -221,6 +232,7 @@ function takeSnapshot() {
   c.drawImage(els.video, 0, 0, canvas.width, canvas.height);
   c.restore();
   c.drawImage(els.overlay, 0, 0, canvas.width, canvas.height);
+
   canvas.toBlob((blob) => {
     if (!blob) return;
     const a = document.createElement("a");
@@ -263,4 +275,5 @@ function bindEvents() {
 loadCfg();
 updateModelButton();
 bindEvents();
+updateStatusPanel();
 setStatus("待机");
