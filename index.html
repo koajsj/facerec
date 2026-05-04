@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Face Minimal Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel camera">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+      </section>
+
+      <section class="panel controls">
+        <h1>Face Minimal Tracker</h1>
+        <p class="sub">Local-only face detection, smooth tracking, zero upload.</p>
+        <div class="actions">
+          <button id="startBtn">Start</button>
+          <button id="stopBtn" disabled>Stop</button>
+        </div>
+        <p class="state"><span>Status</span><strong id="statusText">Idle</strong></p>
+        <p class="state"><span>Metrics</span><strong id="metricsText">idle</strong></p>
+      </section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
