@@ -32,6 +32,20 @@ function iou(a, b) {
 function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
+function expandBox(x, y, w, h, vw, vh, scale = 1.26) {
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const nw = w * scale;
+  const nh = h * scale;
+  const nx = clamp(cx - nw / 2, 0, vw);
+  const ny = clamp(cy - nh / 2, 0, vh);
+  return {
+    x: nx,
+    y: ny,
+    w: clamp(nw, 1, vw - nx),
+    h: clamp(nh, 1, vh - ny)
+  };
+}
 
 export class FaceAlgorithm {
   constructor() {
@@ -112,7 +126,7 @@ export class FaceAlgorithm {
   }
 
   #associate(raw, options) {
-    const { smoothFactor = 0.22, ttlMs = 300, mode = "single", lockId = null, iouThreshold = 0.2 } = options;
+    const { smoothFactor = 0.45, ttlMs = 260, mode = "single", lockId = null, iouThreshold = 0.15 } = options;
     const now = performance.now();
     const entries = [...this.tracks.entries()];
     const used = new Set();
@@ -134,7 +148,7 @@ export class FaceAlgorithm {
       } else {
         const t = this.tracks.get(bestId);
         const move = Math.hypot((d.x + d.w / 2) - (t.x + t.w / 2), (d.y + d.h / 2) - (t.y + t.h / 2));
-        const adaptive = clamp(smoothFactor - move / 400, 0.12, 0.35);
+        const adaptive = clamp(smoothFactor + move / 240, 0.35, 0.78);
         t.x = lerp(t.x, d.x, adaptive);
         t.y = lerp(t.y, d.y, adaptive);
         t.w = lerp(t.w, d.w, adaptive);
@@ -187,7 +201,7 @@ export class FaceAlgorithm {
 
   detect(video, tsMs, options = {}) {
     const {
-      minBoxSize = 20
+      minBoxSize = 10
     } = options;
     const t0 = performance.now();
     let raw = [];
@@ -204,10 +218,11 @@ export class FaceAlgorithm {
           if (p.x > maxX) maxX = p.x;
           if (p.y > maxY) maxY = p.y;
         }
-        const x = clamp(minX * vw, 0, vw);
-        const y = clamp(minY * vh, 0, vh);
-        const w = clamp((maxX - minX) * vw, 1, vw);
-        const h = clamp((maxY - minY) * vh, 1, vh);
+        let x = clamp(minX * vw, 0, vw);
+        let y = clamp(minY * vh, 0, vh);
+        let w = clamp((maxX - minX) * vw, 1, vw);
+        let h = clamp((maxY - minY) * vh, 1, vh);
+        ({ x, y, w, h } = expandBox(x, y, w, h, vw, vh));
         if (w < minBoxSize || h < minBoxSize) continue;
         raw.push({
           x, y, w, h,
@@ -225,10 +240,14 @@ export class FaceAlgorithm {
         const score = det.categories?.[0]?.score || 0;
         if (!b || score < this.minConfidence || b.width < minBoxSize || b.height < minBoxSize) continue;
         raw.push({
-          x: clamp(b.originX, 0, vw),
-          y: clamp(b.originY, 0, vh),
-          w: clamp(b.width, 1, vw),
-          h: clamp(b.height, 1, vh),
+          ...expandBox(
+            clamp(b.originX, 0, vw),
+            clamp(b.originY, 0, vh),
+            clamp(b.width, 1, vw),
+            clamp(b.height, 1, vh),
+            vw,
+            vh
+          ),
           score,
           keypoints: (det.keypoints || []).map((p) => ({ x: p.x * vw, y: p.y * vh })),
           landmarks: null
