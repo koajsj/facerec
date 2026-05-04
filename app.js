@@ -17,7 +17,6 @@ const els = {
 
 const detector = new FaceAlgorithm();
 const ctx = els.overlay.getContext("2d");
-
 const app = {
   running: false,
   starting: false,
@@ -41,6 +40,10 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
+function setStatus(text) {
+  els.statusText.textContent = text;
+}
+
 function saveCfg() {
   localStorage.setItem("face_tracker_cn_v1", JSON.stringify(cfg));
 }
@@ -49,12 +52,8 @@ function loadCfg() {
   try {
     Object.assign(cfg, JSON.parse(localStorage.getItem("face_tracker_cn_v1") || "{}"));
   } catch {
-    // 忽略损坏配置
+    // ignore invalid config
   }
-}
-
-function setStatus(text) {
-  els.statusText.textContent = text;
 }
 
 function updateModelButton() {
@@ -81,27 +80,26 @@ function getQuality(face) {
   return "稳定";
 }
 
-function renderFaceBoxes(faces) {
+function renderBoxes(faces) {
   ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
   const sx = els.overlay.clientWidth / (els.video.videoWidth || 1);
   const sy = els.overlay.clientHeight / (els.video.videoHeight || 1);
-
   for (const face of faces) {
     const x = face.x * sx;
     const y = face.y * sy;
     const w = face.w * sx;
     const h = face.h * sy;
-    const color = "rgba(0,245,130,0.96)";
+    const green = "rgba(0,245,130,0.96)";
     ctx.lineWidth = 2.4;
-    ctx.strokeStyle = color;
-    ctx.shadowColor = color;
+    ctx.strokeStyle = green;
+    ctx.shadowColor = green;
     ctx.shadowBlur = 12;
     ctx.strokeRect(x, y, w, h);
     ctx.shadowBlur = 0;
   }
 }
 
-function updateStatusPanel() {
+function refreshPanel() {
   if (app.faces.length > 0) {
     const conf = ((app.faces[0].scoreAvg || 0) * 100).toFixed(1);
     els.metricsText.textContent = `置信度 ${conf}%`;
@@ -145,34 +143,23 @@ function loop(ts) {
     const result = detector.detect(els.video, ts, {
       smoothFactor: cfg.smoothFactor,
       ttlMs: cfg.ttlMs,
-      mode: "single",
       iouThreshold: 0.15,
-      minBoxSize: 10
+      minBoxSize: 8
     });
     app.faces = result.faces;
     app.events = result.events;
-
-    if (detector.avgLatencyMs > 26) {
-      cfg.detectEveryNFrames = clamp(cfg.detectEveryNFrames + 1, 1, 3);
-    } else if (detector.avgLatencyMs < 12) {
-      cfg.detectEveryNFrames = clamp(cfg.detectEveryNFrames - 1, 1, 3);
-    }
+    if (detector.avgLatencyMs > 26) cfg.detectEveryNFrames = clamp(cfg.detectEveryNFrames + 1, 1, 3);
+    else if (detector.avgLatencyMs < 12) cfg.detectEveryNFrames = clamp(cfg.detectEveryNFrames - 1, 1, 3);
   }
 
-  renderFaceBoxes(app.faces);
-  updateStatusPanel();
+  renderBoxes(app.faces);
+  refreshPanel();
 }
 
 async function start() {
   if (app.running || app.starting) return;
-  if (!window.isSecureContext) {
-    setStatus("错误：需要 HTTPS 或 localhost");
-    return;
-  }
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setStatus("错误：浏览器不支持摄像头");
-    return;
-  }
+  if (!window.isSecureContext) return setStatus("错误：需要 HTTPS 或 localhost");
+  if (!navigator.mediaDevices?.getUserMedia) return setStatus("错误：浏览器不支持摄像头");
 
   app.starting = true;
   els.toggleBtn.disabled = true;
@@ -182,7 +169,6 @@ async function start() {
     detector.reset();
     detector.setMinConfidence(cfg.minConfidence);
     await detector.load(cfg.model, (msg) => setStatus(msg));
-
     setStatus("启动摄像头...");
     await startCamera();
 
@@ -211,13 +197,13 @@ function stop() {
   cancelAnimationFrame(app.raf);
   stopCamera();
   detector.reset();
-  ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
   app.faces = [];
   app.events = [];
+  ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
   els.toggleBtn.textContent = "开始";
   els.shotBtn.disabled = true;
   setStatus("已停止");
-  updateStatusPanel();
+  refreshPanel();
 }
 
 function takeSnapshot() {
@@ -232,7 +218,6 @@ function takeSnapshot() {
   c.drawImage(els.video, 0, 0, canvas.width, canvas.height);
   c.restore();
   c.drawImage(els.overlay, 0, 0, canvas.width, canvas.height);
-
   canvas.toBlob((blob) => {
     if (!blob) return;
     const a = document.createElement("a");
@@ -250,10 +235,7 @@ function bindEvents() {
   };
 
   els.modelBtn.onclick = () => {
-    if (app.running || app.starting) {
-      setStatus("请先停止，再切换模式");
-      return;
-    }
+    if (app.running || app.starting) return setStatus("请先停止，再切换模式");
     cfg.model = cfg.model === "detector" ? "landmarker" : "detector";
     updateModelButton();
     saveCfg();
@@ -275,5 +257,5 @@ function bindEvents() {
 loadCfg();
 updateModelButton();
 bindEvents();
-updateStatusPanel();
+refreshPanel();
 setStatus("待机");

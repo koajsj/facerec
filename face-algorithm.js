@@ -2,37 +2,41 @@ const MODULE_URLS = [
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs",
   "https://unpkg.com/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs"
 ];
+
 const WASM_URLS = [
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm",
   "https://unpkg.com/@mediapipe/tasks-vision@0.10.35/wasm"
 ];
+
 const DETECTOR_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
+
 const LANDMARKER_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
+
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
-function area(b) {
+
+function boxArea(b) {
   return Math.max(0, b.w) * Math.max(0, b.h);
 }
+
 function iou(a, b) {
   const x1 = Math.max(a.x, b.x);
   const y1 = Math.max(a.y, b.y);
   const x2 = Math.min(a.x + a.w, b.x + b.w);
   const y2 = Math.min(a.y + a.h, b.y + b.h);
   const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-  if (!inter) return 0;
-  return inter / (area(a) + area(b) - inter);
+  if (inter <= 0) return 0;
+  return inter / (boxArea(a) + boxArea(b) - inter);
 }
-function dist(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-function expandBox(x, y, w, h, vw, vh, scale = 1.26) {
+
+function expandBox(x, y, w, h, vw, vh, scale = 1.38) {
   const cx = x + w / 2;
   const cy = y + h / 2;
   const nw = w * scale;
@@ -47,6 +51,10 @@ function expandBox(x, y, w, h, vw, vh, scale = 1.26) {
   };
 }
 
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
 export class FaceAlgorithm {
   constructor() {
     this.mode = "detector";
@@ -55,7 +63,7 @@ export class FaceAlgorithm {
     this.tracks = new Map();
     this.seen = new Map();
     this.nextId = 1;
-    this.minConfidence = 0.6;
+    this.minConfidence = 0.45;
     this.lastLatencyMs = 0;
     this.avgLatencyMs = 0;
     this.lastEventTs = 0;
@@ -63,17 +71,18 @@ export class FaceAlgorithm {
 
   async #loadVision(onStatus) {
     let mod = null;
-    let lastErr = null;
+    let lastError = null;
     for (const url of MODULE_URLS) {
       try {
-        onStatus?.(`Loading engine: ${new URL(url).host}`);
+        onStatus?.(`加载引擎: ${new URL(url).host}`);
         mod = await import(url);
         break;
-      } catch (e) {
-        lastErr = e;
+      } catch (err) {
+        lastError = err;
       }
     }
-    if (!mod) throw new Error(`E_MODEL_LOAD: ${lastErr?.message || lastErr || "module failed"}`);
+    if (!mod) throw new Error(`E_MODEL_LOAD: ${lastError?.message || lastError || "module failed"}`);
+
     const { FilesetResolver } = mod;
     let vision = null;
     for (const wasmUrl of WASM_URLS) {
@@ -89,19 +98,21 @@ export class FaceAlgorithm {
   async load(mode = "detector", onStatus) {
     this.mode = mode;
     const { mod, vision } = await this.#loadVision(onStatus);
+
     if (mode === "landmarker") {
       if (!this.landmarker) {
         const { FaceLandmarker } = mod;
         this.landmarker = await FaceLandmarker.createFromOptions(vision, {
           baseOptions: { modelAssetPath: LANDMARKER_MODEL_URL, delegate: "GPU" },
           runningMode: "VIDEO",
-          numFaces: 2,
+          numFaces: 1,
           outputFaceBlendshapes: true,
           minFaceDetectionConfidence: this.minConfidence
         });
       }
       return;
     }
+
     if (!this.detector) {
       const { FaceDetector } = mod;
       this.detector = await FaceDetector.createFromOptions(vision, {
@@ -112,8 +123,8 @@ export class FaceAlgorithm {
     }
   }
 
-  setMinConfidence(value) {
-    this.minConfidence = clamp(value, 0.2, 0.95);
+  setMinConfidence(v) {
+    this.minConfidence = clamp(v, 0.2, 0.95);
   }
 
   reset() {
@@ -125,38 +136,38 @@ export class FaceAlgorithm {
     this.lastEventTs = 0;
   }
 
-  #associate(raw, options) {
-    const { smoothFactor = 0.45, ttlMs = 260, mode = "single", lockId = null, iouThreshold = 0.15 } = options;
+  #track(rawFaces, options) {
+    const { smoothFactor = 0.45, ttlMs = 260, iouThreshold = 0.15 } = options;
     const now = performance.now();
     const entries = [...this.tracks.entries()];
     const used = new Set();
 
-    for (const d of raw) {
+    for (const f of rawFaces) {
       let bestId = null;
-      let best = 0;
+      let bestIou = 0;
       for (const [id, t] of entries) {
         if (used.has(id)) continue;
-        const ov = iou(d, t);
-        if (ov > best) {
-          best = ov;
+        const ov = iou(f, t);
+        if (ov > bestIou) {
+          bestIou = ov;
           bestId = id;
         }
       }
-      if (bestId == null || best < iouThreshold) {
+
+      if (bestId == null || bestIou < iouThreshold) {
         bestId = this.nextId++;
-        this.tracks.set(bestId, { ...d, id: bestId, scoreAvg: d.score });
+        this.tracks.set(bestId, { ...f, id: bestId, scoreAvg: f.score });
       } else {
         const t = this.tracks.get(bestId);
-        const move = Math.hypot((d.x + d.w / 2) - (t.x + t.w / 2), (d.y + d.h / 2) - (t.y + t.h / 2));
-        const adaptive = clamp(smoothFactor + move / 240, 0.35, 0.78);
-        t.x = lerp(t.x, d.x, adaptive);
-        t.y = lerp(t.y, d.y, adaptive);
-        t.w = lerp(t.w, d.w, adaptive);
-        t.h = lerp(t.h, d.h, adaptive);
-        t.score = d.score;
-        t.scoreAvg = t.scoreAvg * 0.75 + d.score * 0.25;
-        t.keypoints = d.keypoints || [];
-        t.landmarks = d.landmarks || null;
+        const movement = Math.hypot((f.x + f.w / 2) - (t.x + t.w / 2), (f.y + f.h / 2) - (t.y + t.h / 2));
+        const alpha = clamp(smoothFactor + movement / 240, 0.35, 0.82);
+        t.x = lerp(t.x, f.x, alpha);
+        t.y = lerp(t.y, f.y, alpha);
+        t.w = lerp(t.w, f.w, alpha);
+        t.h = lerp(t.h, f.h, alpha);
+        t.score = f.score;
+        t.scoreAvg = t.scoreAvg * 0.75 + f.score * 0.25;
+        t.landmarks = f.landmarks || null;
       }
       used.add(bestId);
       this.seen.set(bestId, now);
@@ -169,47 +180,39 @@ export class FaceAlgorithm {
       }
     }
 
-    let faces = [...this.tracks.values()].sort((a, b) => area(b) - area(a));
-    if (lockId != null) {
-      const locked = faces.find((f) => f.id === lockId);
-      faces = locked ? [locked] : [];
-    } else if (mode === "single") {
-      faces = faces.slice(0, 1);
-    }
-    return faces;
+    return [...this.tracks.values()].sort((a, b) => boxArea(b) - boxArea(a)).slice(0, 1);
   }
 
-  #eventsFromLandmarks(face) {
+  #extractEvents(face) {
     const lm = face?.landmarks;
     if (!lm || lm.length < 309) return [];
+
     const leftEAR = dist(lm[159], lm[145]) / Math.max(1e-6, dist(lm[33], lm[133]));
     const rightEAR = dist(lm[386], lm[374]) / Math.max(1e-6, dist(lm[263], lm[362]));
     const mouthOpen = dist(lm[13], lm[14]) / Math.max(1e-6, dist(lm[78], lm[308]));
-    const events = [];
+
     const now = performance.now();
-    if (now - this.lastEventTs > 350) {
-      if ((leftEAR + rightEAR) / 2 < 0.18) {
-        events.push("blink");
-        this.lastEventTs = now;
-      } else if (mouthOpen > 0.34) {
-        events.push("mouth_open");
-        this.lastEventTs = now;
-      }
+    if (now - this.lastEventTs <= 350) return [];
+    if ((leftEAR + rightEAR) / 2 < 0.18) {
+      this.lastEventTs = now;
+      return ["blink"];
     }
-    return events;
+    if (mouthOpen > 0.34) {
+      this.lastEventTs = now;
+      return ["mouth_open"];
+    }
+    return [];
   }
 
   detect(video, tsMs, options = {}) {
-    const {
-      minBoxSize = 10
-    } = options;
+    const { minBoxSize = 8 } = options;
+    const vw = video.videoWidth || 1;
+    const vh = video.videoHeight || 1;
     const t0 = performance.now();
-    let raw = [];
+    const raw = [];
 
     if (this.mode === "landmarker" && this.landmarker) {
       const res = this.landmarker.detectForVideo(video, tsMs);
-      const vw = video.videoWidth || 1;
-      const vh = video.videoHeight || 1;
       const blendshapes = res.faceBlendshapes || [];
       for (let i = 0; i < (res.faceLandmarks || []).length; i += 1) {
         const landmarks = res.faceLandmarks[i];
@@ -220,50 +223,39 @@ export class FaceAlgorithm {
           if (p.x > maxX) maxX = p.x;
           if (p.y > maxY) maxY = p.y;
         }
-        let x = clamp(minX * vw, 0, vw);
-        let y = clamp(minY * vh, 0, vh);
-        let w = clamp((maxX - minX) * vw, 1, vw);
-        let h = clamp((maxY - minY) * vh, 1, vh);
+        let x = minX * vw;
+        let y = minY * vh;
+        let w = (maxX - minX) * vw;
+        let h = (maxY - minY) * vh;
         ({ x, y, w, h } = expandBox(x, y, w, h, vw, vh));
         if (w < minBoxSize || h < minBoxSize) continue;
         const categories = blendshapes[i]?.categories || [];
-        const facePresence = categories.find((c) => (c.categoryName || "").toLowerCase().includes("presence"))?.score;
-        const score = typeof facePresence === "number" ? clamp(facePresence, 0, 1) : 0.88;
+        const presence = categories.find((c) => (c.categoryName || "").toLowerCase().includes("presence"))?.score;
         raw.push({
-          x, y, w, h,
-          score,
-          landmarks: landmarks.map((p) => ({ x: p.x * vw, y: p.y * vh })),
-          keypoints: []
+          x,
+          y,
+          w,
+          h,
+          score: typeof presence === "number" ? clamp(presence, 0, 1) : 0.88,
+          landmarks: landmarks.map((p) => ({ x: p.x * vw, y: p.y * vh }))
         });
       }
     } else if (this.detector) {
       const res = this.detector.detectForVideo(video, tsMs);
-      const vw = video.videoWidth || 1;
-      const vh = video.videoHeight || 1;
       for (const det of res.detections || []) {
         const b = det.boundingBox;
         const score = det.categories?.[0]?.score || 0;
         if (!b || score < this.minConfidence || b.width < minBoxSize || b.height < minBoxSize) continue;
-        raw.push({
-          ...expandBox(
-            clamp(b.originX, 0, vw),
-            clamp(b.originY, 0, vh),
-            clamp(b.width, 1, vw),
-            clamp(b.height, 1, vh),
-            vw,
-            vh
-          ),
-          score,
-          keypoints: (det.keypoints || []).map((p) => ({ x: p.x * vw, y: p.y * vh })),
-          landmarks: null
-        });
+        const expanded = expandBox(b.originX, b.originY, b.width, b.height, vw, vh);
+        raw.push({ ...expanded, score, landmarks: null });
       }
     }
 
     this.lastLatencyMs = performance.now() - t0;
     this.avgLatencyMs = this.avgLatencyMs === 0 ? this.lastLatencyMs : this.avgLatencyMs * 0.9 + this.lastLatencyMs * 0.1;
-    const faces = this.#associate(raw, options);
-    const events = this.mode === "landmarker" ? this.#eventsFromLandmarks(faces[0]) : [];
+
+    const faces = this.#track(raw, options);
+    const events = this.mode === "landmarker" ? this.#extractEvents(faces[0]) : [];
     return { faces, events };
   }
 }
