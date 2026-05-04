@@ -78,3 +78,10 @@ py -m http.server 5600
 - 引入 OneEuro Filter，提升快动/慢动场景统一体验  
 - 增加 IoU 跟踪与ID重关联，提升多人稳定性  
 - 接入离线样本回归，自动比较版本性能退化
+## 模型选择（当前）
+
+- 使用模型：`MediaPipe Face Detector (BlazeFace short-range)`
+- 选择理由：
+  - 性能：适合浏览器端实时检测，移动端和桌面端帧率表现稳定
+  - 准确率：在近距人脸框检测场景下精度与速度平衡好
+  - 可用性：开源生态成熟，Web 集成简单，支持 GPU/CPU 回退

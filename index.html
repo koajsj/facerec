@@ -22,19 +22,16 @@
         <h1>Face Tracker Pro</h1>
         <p class="sub">本地识别 · 实时跟踪 · 极简科技风</p>
 
-        <div class="actions">
-          <button id="startBtn">Start (S)</button>
+        <div class="toolbar">
+          <button id="startBtn" class="btn-primary">Start (S)</button>
           <button id="stopBtn" disabled>Stop (X)</button>
-          <button id="themeBtn">Theme</button>
           <button id="debugBtn">Debug (D)</button>
+          <button id="themeBtn">Theme</button>
         </div>
 
-        <div class="actions">
+        <div class="actions compact">
           <button id="shotBtn" disabled>截图</button>
           <button id="exportBtn" disabled>导出JSON</button>
-          <button id="presetMeeting">会议</button>
-          <button id="presetSelfie">自拍</button>
-          <button id="presetLow">省电</button>
         </div>
 
         <div class="grid">
@@ -59,6 +56,12 @@
           </label>
           <label class="inline"><input id="kpToggle" type="checkbox" checked />显示关键点</label>
           <label class="inline"><input id="privacyToggle" type="checkbox" checked />隐私模式</label>
+        </div>
+
+        <div class="actions compact">
+          <button id="presetMeeting">会议预设</button>
+          <button id="presetSelfie">自拍预设</button>
+          <button id="presetLow">省电预设</button>
         </div>
 
         <p class="state"><span>状态</span><strong id="statusText">Idle</strong></p>
