@@ -154,7 +154,7 @@ export class FaceAlgorithm {
         t.w = lerp(t.w, d.w, adaptive);
         t.h = lerp(t.h, d.h, adaptive);
         t.score = d.score;
-        t.scoreAvg = t.scoreAvg * 0.9 + d.score * 0.1;
+        t.scoreAvg = t.scoreAvg * 0.75 + d.score * 0.25;
         t.keypoints = d.keypoints || [];
         t.landmarks = d.landmarks || null;
       }
@@ -210,7 +210,9 @@ export class FaceAlgorithm {
       const res = this.landmarker.detectForVideo(video, tsMs);
       const vw = video.videoWidth || 1;
       const vh = video.videoHeight || 1;
-      for (const landmarks of res.faceLandmarks || []) {
+      const blendshapes = res.faceBlendshapes || [];
+      for (let i = 0; i < (res.faceLandmarks || []).length; i += 1) {
+        const landmarks = res.faceLandmarks[i];
         let minX = 1, minY = 1, maxX = 0, maxY = 0;
         for (const p of landmarks) {
           if (p.x < minX) minX = p.x;
@@ -224,9 +226,12 @@ export class FaceAlgorithm {
         let h = clamp((maxY - minY) * vh, 1, vh);
         ({ x, y, w, h } = expandBox(x, y, w, h, vw, vh));
         if (w < minBoxSize || h < minBoxSize) continue;
+        const categories = blendshapes[i]?.categories || [];
+        const facePresence = categories.find((c) => (c.categoryName || "").toLowerCase().includes("presence"))?.score;
+        const score = typeof facePresence === "number" ? clamp(facePresence, 0, 1) : 0.88;
         raw.push({
           x, y, w, h,
-          score: 0.9,
+          score,
           landmarks: landmarks.map((p) => ({ x: p.x * vw, y: p.y * vh })),
           keypoints: []
         });

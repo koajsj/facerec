@@ -103,7 +103,7 @@ function renderFaceBoxes(faces) {
 
 function updateStatusPanel() {
   if (app.faces.length > 0) {
-    const conf = Math.round((app.faces[0].scoreAvg || 0) * 100);
+    const conf = ((app.faces[0].scoreAvg || 0) * 100).toFixed(1);
     els.metricsText.textContent = `置信度 ${conf}%`;
   } else {
     els.metricsText.textContent = "未检测到人脸";
