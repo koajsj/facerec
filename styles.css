@@ -62,7 +62,7 @@ h1 { margin: 0; font-size: 1.2rem; letter-spacing: 0.02em; }
 .toolbar {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
 }
 .tools {
@@ -97,28 +97,6 @@ button {
 button:disabled { opacity: 0.45; }
 button:not(:disabled):hover { border-color: rgba(47,231,255,0.55); }
 
-.grid {
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-label {
-  color: var(--muted);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.9rem;
-}
-label.inline { flex-direction: row; align-items: center; gap: 8px; }
-select {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(8,16,28,0.9);
-  padding: 7px 8px;
-}
-input[type="range"] { accent-color: var(--accent); }
-
 .state {
   margin: 10px 0 0;
   border-top: 1px dashed rgba(133,215,255,0.2);
@@ -126,18 +104,6 @@ input[type="range"] { accent-color: var(--accent); }
   display: flex; justify-content: space-between;
 }
 .state span { color: var(--muted); }
-
-.debug-overlay {
-  position: absolute; top: 8px; left: 8px;
-  border: 1px solid rgba(47,231,255,0.4);
-  background: rgba(4,11,22,0.78);
-  color: #b9fdff;
-  border-radius: 8px;
-  padding: 6px 8px;
-  white-space: pre;
-  font-size: 12px;
-}
-.hidden { display: none; }
 
 @media (min-width: 980px) {
   .layout { grid-template-columns: minmax(0, 2fr) minmax(360px, 1fr); align-items: start; }
