@@ -3,33 +3,75 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Face Minimal Tracker</title>
+    <title>Face Tracker Pro</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Sora:wght@500;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+  <body data-theme="light">
     <main class="layout">
-      <section class="panel camera">
+      <section class="panel camera-wrap">
         <video id="video" playsinline muted></video>
         <canvas id="overlay"></canvas>
+        <div id="debugOverlay" class="debug-overlay hidden"></div>
       </section>
 
-      <section class="panel controls">
-        <h1>Face Minimal Tracker</h1>
-        <p class="sub">Local-only face detection, smooth tracking, zero upload.</p>
-        <div class="actions">
-          <button id="startBtn">Start</button>
-          <button id="stopBtn" disabled>Stop</button>
+      <section class="panel side">
+        <h1>Face Tracker Pro</h1>
+        <p class="sub">本地人脸检测，实时方框跟踪，不上传视频。</p>
+
+        <div class="row">
+          <button id="startBtn">Start (S)</button>
+          <button id="stopBtn" disabled>Stop (X)</button>
+          <button id="themeBtn">Theme</button>
         </div>
-        <p class="state"><span>Status</span><strong id="statusText">Idle</strong></p>
-        <p class="state"><span>Metrics</span><strong id="metricsText">idle</strong></p>
+
+        <div class="row">
+          <button id="shotBtn" disabled>截图</button>
+          <button id="exportBtn" disabled>导出JSON</button>
+          <button id="debugBtn">Debug (D)</button>
+        </div>
+
+        <div class="grid">
+          <label>模式
+            <select id="modeSelect">
+              <option value="single">单人优先</option>
+              <option value="multi">多人显示</option>
+            </select>
+          </label>
+          <label>性能档位
+            <select id="perfSelect">
+              <option value="high">高性能</option>
+              <option value="balance" selected>均衡</option>
+              <option value="save">省电</option>
+            </select>
+          </label>
+          <label>平滑强度
+            <input id="smoothRange" type="range" min="0.08" max="0.45" step="0.01" value="0.22" />
+          </label>
+          <label>置信阈值
+            <input id="confRange" type="range" min="0.3" max="0.9" step="0.01" value="0.6" />
+          </label>
+          <label><input id="kpToggle" type="checkbox" checked />显示关键点</label>
+          <label><input id="privacyToggle" type="checkbox" checked />隐私模式</label>
+        </div>
+
+        <div class="row">
+          <button id="presetMeeting">会议预设</button>
+          <button id="presetSelfie">自拍预设</button>
+          <button id="presetLow">低配预设</button>
+        </div>
+
+        <p class="state"><span>状态</span><strong id="statusText">Idle</strong></p>
+        <p class="state"><span>指标</span><strong id="metricsText">idle</strong></p>
+        <p class="state"><span>质量</span><strong id="qualityText">waiting</strong></p>
       </section>
     </main>
+
     <script type="module" src="./app.js"></script>
   </body>
 </html>

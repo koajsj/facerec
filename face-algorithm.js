@@ -8,6 +8,9 @@ const WASM_URLS = [
   "https://unpkg.com/@mediapipe/tasks-vision@0.10.35/wasm"
 ];
 
+const MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
+
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
@@ -16,109 +19,157 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function boxArea(b) {
+  return Math.max(0, b.w) * Math.max(0, b.h);
+}
+
 export class FaceAlgorithm {
   constructor() {
-    this.faceDetector = null;
-    this.module = null;
-    this.smoothBox = null;
+    this.detector = null;
+    this.rawFaces = [];
+    this.smoothFaces = new Map();
+    this.nextId = 1;
     this.lastLatencyMs = 0;
-    this.lastScore = 0;
+    this.avgLatencyMs = 0;
+    this.minConfidence = 0.6;
+    this.lastSeenTs = new Map();
   }
 
   async load(onStatus) {
-    if (this.faceDetector) return;
-    let lastError = null;
-
-    for (const moduleUrl of MODULE_URLS) {
+    if (this.detector) return;
+    let mod = null;
+    let lastErr = null;
+    for (const url of MODULE_URLS) {
       try {
-        onStatus?.(`Loading detector from ${new URL(moduleUrl).host}...`);
-        const mod = await import(moduleUrl);
-        this.module = mod;
+        onStatus?.(`加载引擎: ${new URL(url).host}`);
+        mod = await import(url);
         break;
-      } catch (err) {
-        lastError = err;
+      } catch (e) {
+        lastErr = e;
       }
     }
+    if (!mod) throw new Error(`E_MODEL_LOAD: ${lastErr?.message || lastErr || "module failed"}`);
 
-    if (!this.module) {
-      throw new Error(`Detector module failed to load. ${lastError?.message || lastError || ""}`.trim());
-    }
-
-    const { FilesetResolver, FaceDetector } = this.module;
+    const { FilesetResolver, FaceDetector } = mod;
     let vision = null;
     for (const wasmUrl of WASM_URLS) {
       try {
         vision = await FilesetResolver.forVisionTasks(wasmUrl);
         break;
       } catch {
-        // try next source
+        // fallback source
       }
     }
+    if (!vision) throw new Error("E_MODEL_LOAD: wasm failed");
 
-    if (!vision) {
-      throw new Error("WASM runtime failed to load from all sources.");
+    try {
+      this.detector = await FaceDetector.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
+        runningMode: "VIDEO",
+        minDetectionConfidence: this.minConfidence
+      });
+    } catch {
+      this.detector = await FaceDetector.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
+        runningMode: "VIDEO",
+        minDetectionConfidence: this.minConfidence
+      });
     }
-
-    this.faceDetector = await FaceDetector.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite",
-        delegate: "GPU"
-      },
-      runningMode: "VIDEO",
-      minDetectionConfidence: 0.6
-    });
   }
 
-  detect(video, tsMs) {
-    if (!this.faceDetector) {
-      return null;
-    }
+  setMinConfidence(value) {
+    this.minConfidence = clamp(value, 0.2, 0.95);
+  }
+
+  reset() {
+    this.rawFaces = [];
+    this.smoothFaces.clear();
+    this.lastSeenTs.clear();
+    this.nextId = 1;
+    this.lastLatencyMs = 0;
+    this.avgLatencyMs = 0;
+  }
+
+  detect(video, tsMs, options) {
+    if (!this.detector) return [];
+    const { smoothFactor = 0.22, ttlMs = 280, mode = "single", minBoxSize = 20, lockId = null } = options;
 
     const t0 = performance.now();
-    const result = this.faceDetector.detectForVideo(video, tsMs);
+    const result = this.detector.detectForVideo(video, tsMs);
     this.lastLatencyMs = performance.now() - t0;
+    this.avgLatencyMs = this.avgLatencyMs === 0 ? this.lastLatencyMs : this.avgLatencyMs * 0.9 + this.lastLatencyMs * 0.1;
 
-    const faces = result.detections || [];
-    if (!faces.length) {
-      this.smoothBox = null;
-      this.lastScore = 0;
-      return null;
+    const vw = video.videoWidth || 1;
+    const vh = video.videoHeight || 1;
+    const now = performance.now();
+    const detections = result.detections || [];
+
+    const current = [];
+    for (const det of detections) {
+      const b = det.boundingBox;
+      if (!b) continue;
+      const score = det.categories?.[0]?.score || 0;
+      if (score < this.minConfidence) continue;
+      if (b.width < minBoxSize || b.height < minBoxSize) continue;
+      current.push({
+        x: clamp(b.originX, 0, vw),
+        y: clamp(b.originY, 0, vh),
+        w: clamp(b.width, 1, vw),
+        h: clamp(b.height, 1, vh),
+        score,
+        keypoints: (det.keypoints || []).map((p) => ({ x: p.x * vw, y: p.y * vh }))
+      });
     }
 
-    // Track the largest face to keep behavior stable in multi-face scenes.
-    let best = faces[0];
-    let bestArea = 0;
-    for (const d of faces) {
-      const b = d.boundingBox;
-      const area = (b?.width || 0) * (b?.height || 0);
-      if (area > bestArea) {
-        best = d;
-        bestArea = area;
+    // Greedy association by nearest center.
+    const smoothEntries = [...this.smoothFaces.entries()];
+    const used = new Set();
+    for (const face of current) {
+      let bestId = null;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (const [id, s] of smoothEntries) {
+        if (used.has(id)) continue;
+        const dx = s.x + s.w / 2 - (face.x + face.w / 2);
+        const dy = s.y + s.h / 2 - (face.y + face.h / 2);
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestId = id;
+        }
+      }
+      if (bestId == null) {
+        bestId = this.nextId++;
+        this.smoothFaces.set(bestId, { ...face, id: bestId, scoreAvg: face.score });
+      } else {
+        const s = this.smoothFaces.get(bestId);
+        s.x = lerp(s.x, face.x, smoothFactor);
+        s.y = lerp(s.y, face.y, smoothFactor);
+        s.w = lerp(s.w, face.w, smoothFactor);
+        s.h = lerp(s.h, face.h, smoothFactor);
+        s.score = face.score;
+        s.scoreAvg = s.scoreAvg * 0.9 + face.score * 0.1;
+        s.keypoints = face.keypoints;
+      }
+      used.add(bestId);
+      this.lastSeenTs.set(bestId, now);
+    }
+
+    // TTL retention to reduce blinking.
+    for (const [id] of this.smoothFaces) {
+      const seen = this.lastSeenTs.get(id) || 0;
+      if (now - seen > ttlMs) {
+        this.smoothFaces.delete(id);
+        this.lastSeenTs.delete(id);
       }
     }
 
-    const box = best.boundingBox;
-    if (!box) return null;
-    this.lastScore = best.categories?.[0]?.score || 0;
-
-    if (!this.smoothBox) {
-      this.smoothBox = { x: box.originX, y: box.originY, w: box.width, h: box.height };
-    } else {
-      const t = 0.22;
-      this.smoothBox.x = lerp(this.smoothBox.x, box.originX, t);
-      this.smoothBox.y = lerp(this.smoothBox.y, box.originY, t);
-      this.smoothBox.w = lerp(this.smoothBox.w, box.width, t);
-      this.smoothBox.h = lerp(this.smoothBox.h, box.height, t);
+    let faces = [...this.smoothFaces.values()].sort((a, b) => boxArea(b) - boxArea(a));
+    if (lockId != null) {
+      const locked = faces.find((f) => f.id === lockId);
+      if (locked) faces = [locked];
+    } else if (mode === "single") {
+      faces = faces.slice(0, 1);
     }
-
-    return {
-      x: clamp(this.smoothBox.x, 0, video.videoWidth),
-      y: clamp(this.smoothBox.y, 0, video.videoHeight),
-      w: clamp(this.smoothBox.w, 1, video.videoWidth),
-      h: clamp(this.smoothBox.h, 1, video.videoHeight),
-      score: this.lastScore,
-      latencyMs: this.lastLatencyMs
-    };
+    return faces;
   }
 }
