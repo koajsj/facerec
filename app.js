@@ -1,14 +1,9 @@
-import { FaceAlgorithm } from "./face-algorithm.js";
+﻿import { FaceAlgorithm } from "./face-algorithm.js";
 
 const els = {
   video: document.getElementById("video"),
   overlay: document.getElementById("overlay"),
   toggleBtn: document.getElementById("toggleBtn"),
-  modelBtn: document.getElementById("modelBtn"),
-  toolsBtn: document.getElementById("toolsBtn"),
-  toolsPanel: document.getElementById("toolsPanel"),
-  shotBtn: document.getElementById("shotBtn"),
-  themeBtn: document.getElementById("themeBtn"),
   statusText: document.getElementById("statusText"),
   metricsText: document.getElementById("metricsText"),
   qualityText: document.getElementById("qualityText"),
@@ -29,7 +24,6 @@ const app = {
 };
 
 const cfg = {
-  model: "detector",
   smoothFactor: 0.45,
   minConfidence: 0.45,
   ttlMs: 260,
@@ -42,22 +36,6 @@ function clamp(v, min, max) {
 
 function setStatus(text) {
   els.statusText.textContent = text;
-}
-
-function saveCfg() {
-  localStorage.setItem("face_tracker_cn_v1", JSON.stringify(cfg));
-}
-
-function loadCfg() {
-  try {
-    Object.assign(cfg, JSON.parse(localStorage.getItem("face_tracker_cn_v1") || "{}"));
-  } catch {
-    // ignore invalid config
-  }
-}
-
-function updateModelButton() {
-  els.modelBtn.textContent = `模式：${cfg.model === "detector" ? "检测器" : "关键点"}`;
 }
 
 function resizeCanvas() {
@@ -168,7 +146,8 @@ async function start() {
     setStatus("加载模型中...");
     detector.reset();
     detector.setMinConfidence(cfg.minConfidence);
-    await detector.load(cfg.model, (msg) => setStatus(msg));
+    await detector.load((msg) => setStatus(msg));
+
     setStatus("启动摄像头...");
     await startCamera();
 
@@ -179,7 +158,6 @@ async function start() {
     app.events = [];
 
     els.toggleBtn.textContent = "停止";
-    els.shotBtn.disabled = false;
     setStatus("追踪中");
     app.raf = requestAnimationFrame(loop);
   } catch (err) {
@@ -201,31 +179,8 @@ function stop() {
   app.events = [];
   ctx.clearRect(0, 0, els.overlay.clientWidth, els.overlay.clientHeight);
   els.toggleBtn.textContent = "开始";
-  els.shotBtn.disabled = true;
   setStatus("已停止");
   refreshPanel();
-}
-
-function takeSnapshot() {
-  if (!els.video.videoWidth) return;
-  const canvas = document.createElement("canvas");
-  canvas.width = els.video.videoWidth;
-  canvas.height = els.video.videoHeight;
-  const c = canvas.getContext("2d");
-  c.save();
-  c.translate(canvas.width, 0);
-  c.scale(-1, 1);
-  c.drawImage(els.video, 0, 0, canvas.width, canvas.height);
-  c.restore();
-  c.drawImage(els.overlay, 0, 0, canvas.width, canvas.height);
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `截图-${Date.now()}.png`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
 }
 
 function bindEvents() {
@@ -234,28 +189,9 @@ function bindEvents() {
     else await start();
   };
 
-  els.modelBtn.onclick = () => {
-    if (app.running || app.starting) return setStatus("请先停止，再切换模式");
-    cfg.model = cfg.model === "detector" ? "landmarker" : "detector";
-    updateModelButton();
-    saveCfg();
-  };
-
-  els.toolsBtn.onclick = () => {
-    els.toolsPanel.open = !els.toolsPanel.open;
-  };
-
-  els.shotBtn.onclick = takeSnapshot;
-
-  els.themeBtn.onclick = () => {
-    document.body.dataset.theme = document.body.dataset.theme === "dark" ? "light" : "dark";
-  };
-
   window.addEventListener("resize", resizeCanvas);
 }
 
-loadCfg();
-updateModelButton();
 bindEvents();
 refreshPanel();
 setStatus("待机");

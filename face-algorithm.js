@@ -1,4 +1,4 @@
-const MODULE_URLS = [
+﻿const MODULE_URLS = [
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs",
   "https://unpkg.com/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs"
 ];
@@ -7,9 +7,6 @@ const WASM_URLS = [
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm",
   "https://unpkg.com/@mediapipe/tasks-vision@0.10.35/wasm"
 ];
-
-const DETECTOR_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
 
 const LANDMARKER_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
@@ -57,8 +54,6 @@ function dist(a, b) {
 
 export class FaceAlgorithm {
   constructor() {
-    this.mode = "detector";
-    this.detector = null;
     this.landmarker = null;
     this.tracks = new Map();
     this.seen = new Map();
@@ -74,7 +69,7 @@ export class FaceAlgorithm {
     let lastError = null;
     for (const url of MODULE_URLS) {
       try {
-        onStatus?.(`加载引擎: ${new URL(url).host}`);
+        onStatus?.(`鍔犺浇寮曟搸: ${new URL(url).host}`);
         mod = await import(url);
         break;
       } catch (err) {
@@ -95,32 +90,17 @@ export class FaceAlgorithm {
     return { mod, vision };
   }
 
-  async load(mode = "detector", onStatus) {
-    this.mode = mode;
+  async load(onStatus) {
+    if (this.landmarker) return;
     const { mod, vision } = await this.#loadVision(onStatus);
-
-    if (mode === "landmarker") {
-      if (!this.landmarker) {
-        const { FaceLandmarker } = mod;
-        this.landmarker = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: LANDMARKER_MODEL_URL, delegate: "GPU" },
-          runningMode: "VIDEO",
-          numFaces: 1,
-          outputFaceBlendshapes: true,
-          minFaceDetectionConfidence: this.minConfidence
-        });
-      }
-      return;
-    }
-
-    if (!this.detector) {
-      const { FaceDetector } = mod;
-      this.detector = await FaceDetector.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: DETECTOR_MODEL_URL, delegate: "GPU" },
-        runningMode: "VIDEO",
-        minDetectionConfidence: this.minConfidence
-      });
-    }
+    const { FaceLandmarker } = mod;
+    this.landmarker = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: LANDMARKER_MODEL_URL, delegate: "GPU" },
+      runningMode: "VIDEO",
+      numFaces: 1,
+      outputFaceBlendshapes: true,
+      minFaceDetectionConfidence: this.minConfidence
+    });
   }
 
   setMinConfidence(v) {
@@ -167,7 +147,7 @@ export class FaceAlgorithm {
         t.h = lerp(t.h, f.h, alpha);
         t.score = f.score;
         t.scoreAvg = t.scoreAvg * 0.75 + f.score * 0.25;
-        t.landmarks = f.landmarks || null;
+        t.landmarks = f.landmarks;
       }
       used.add(bestId);
       this.seen.set(bestId, now);
@@ -211,12 +191,15 @@ export class FaceAlgorithm {
     const t0 = performance.now();
     const raw = [];
 
-    if (this.mode === "landmarker" && this.landmarker) {
+    if (this.landmarker) {
       const res = this.landmarker.detectForVideo(video, tsMs);
       const blendshapes = res.faceBlendshapes || [];
       for (let i = 0; i < (res.faceLandmarks || []).length; i += 1) {
         const landmarks = res.faceLandmarks[i];
-        let minX = 1, minY = 1, maxX = 0, maxY = 0;
+        let minX = 1;
+        let minY = 1;
+        let maxX = 0;
+        let maxY = 0;
         for (const p of landmarks) {
           if (p.x < minX) minX = p.x;
           if (p.y < minY) minY = p.y;
@@ -240,22 +223,13 @@ export class FaceAlgorithm {
           landmarks: landmarks.map((p) => ({ x: p.x * vw, y: p.y * vh }))
         });
       }
-    } else if (this.detector) {
-      const res = this.detector.detectForVideo(video, tsMs);
-      for (const det of res.detections || []) {
-        const b = det.boundingBox;
-        const score = det.categories?.[0]?.score || 0;
-        if (!b || score < this.minConfidence || b.width < minBoxSize || b.height < minBoxSize) continue;
-        const expanded = expandBox(b.originX, b.originY, b.width, b.height, vw, vh);
-        raw.push({ ...expanded, score, landmarks: null });
-      }
     }
 
     this.lastLatencyMs = performance.now() - t0;
     this.avgLatencyMs = this.avgLatencyMs === 0 ? this.lastLatencyMs : this.avgLatencyMs * 0.9 + this.lastLatencyMs * 0.1;
 
     const faces = this.#track(raw, options);
-    const events = this.mode === "landmarker" ? this.#extractEvents(faces[0]) : [];
+    const events = this.#extractEvents(faces[0]);
     return { faces, events };
   }
 }
