@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Face Tracker Pro</title>
+    <title>人脸追踪</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&display=swap" rel="stylesheet" />
@@ -19,62 +19,27 @@
       </section>
 
       <aside class="panel side">
-        <h1>Face Tracker Pro</h1>
-        <p class="sub">Local only · Real-time tracking</p>
+        <h1>人脸追踪</h1>
+        <p class="sub">本地识别 · 实时跟随</p>
 
         <div class="toolbar">
-          <button id="startBtn" class="btn-primary">Start (S)</button>
-          <button id="stopBtn" disabled>Stop (X)</button>
+          <button id="toggleBtn" class="btn-primary">开始</button>
+          <button id="modelBtn">模式：检测器</button>
+          <button id="toolsBtn">工具</button>
         </div>
 
-        <details class="tools">
-          <summary>Tools</summary>
+        <details class="tools" id="toolsPanel">
+          <summary>工具面板</summary>
           <div class="actions compact">
-            <button id="debugBtn">Debug (D)</button>
-            <button id="themeBtn">Theme</button>
-            <button id="shotBtn" disabled>Snapshot</button>
-            <button id="exportBtn" disabled>Export JSON</button>
-          </div>
-          <div class="grid">
-            <label>Mode
-              <select id="modeSelect">
-                <option value="single">Single</option>
-                <option value="multi">Multi</option>
-              </select>
-            </label>
-            <label>Model
-              <select id="modelSelect">
-                <option value="detector">BlazeFace Detector</option>
-                <option value="landmarker">Face Landmarker</option>
-              </select>
-            </label>
-            <label>Performance
-              <select id="perfSelect">
-                <option value="high">High</option>
-                <option value="balance" selected>Balance</option>
-                <option value="save">Save</option>
-              </select>
-            </label>
-            <label>Smooth
-              <input id="smoothRange" type="range" min="0.08" max="0.45" step="0.01" value="0.22" />
-            </label>
-            <label>Confidence
-              <input id="confRange" type="range" min="0.3" max="0.9" step="0.01" value="0.6" />
-            </label>
-            <label class="inline"><input id="kpToggle" type="checkbox" checked />Keypoints</label>
-            <label class="inline"><input id="privacyToggle" type="checkbox" checked />Privacy</label>
-          </div>
-          <div class="actions compact">
-            <button id="presetMeeting">Meeting</button>
-            <button id="presetSelfie">Selfie</button>
-            <button id="presetLow">Save Power</button>
+            <button id="shotBtn" disabled>截图</button>
+            <button id="themeBtn">主题</button>
           </div>
         </details>
 
-        <p class="state"><span>Status</span><strong id="statusText">Idle</strong></p>
-        <p class="state"><span>Metrics</span><strong id="metricsText">idle</strong></p>
-        <p class="state"><span>Quality</span><strong id="qualityText">waiting</strong></p>
-        <p class="state"><span>Events</span><strong id="eventText">none</strong></p>
+        <p class="state"><span>状态</span><strong id="statusText">待机</strong></p>
+        <p class="state"><span>指标</span><strong id="metricsText">等待开始</strong></p>
+        <p class="state"><span>质量</span><strong id="qualityText">等待中</strong></p>
+        <p class="state"><span>事件</span><strong id="eventText">无</strong></p>
       </aside>
     </main>
     <script type="module" src="./app.js"></script>
