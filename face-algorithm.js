@@ -6,8 +6,10 @@ const WASM_URLS = [
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm",
   "https://unpkg.com/@mediapipe/tasks-vision@0.10.35/wasm"
 ];
-const MODEL_URL =
+const DETECTOR_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
+const LANDMARKER_MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
@@ -15,7 +17,7 @@ function clamp(v, min, max) {
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
-function boxArea(b) {
+function area(b) {
   return Math.max(0, b.w) * Math.max(0, b.h);
 }
 function iou(a, b) {
@@ -24,24 +26,28 @@ function iou(a, b) {
   const x2 = Math.min(a.x + a.w, b.x + b.w);
   const y2 = Math.min(a.y + a.h, b.y + b.h);
   const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-  if (inter <= 0) return 0;
-  const union = boxArea(a) + boxArea(b) - inter;
-  return union <= 0 ? 0 : inter / union;
+  if (!inter) return 0;
+  return inter / (area(a) + area(b) - inter);
+}
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 export class FaceAlgorithm {
   constructor() {
+    this.mode = "detector";
     this.detector = null;
+    this.landmarker = null;
     this.tracks = new Map();
-    this.lastSeenTs = new Map();
+    this.seen = new Map();
     this.nextId = 1;
     this.minConfidence = 0.6;
     this.lastLatencyMs = 0;
     this.avgLatencyMs = 0;
+    this.lastEventTs = 0;
   }
 
-  async load(onStatus) {
-    if (this.detector) return;
+  async #loadVision(onStatus) {
     let mod = null;
     let lastErr = null;
     for (const url of MODULE_URLS) {
@@ -54,8 +60,7 @@ export class FaceAlgorithm {
       }
     }
     if (!mod) throw new Error(`E_MODEL_LOAD: ${lastErr?.message || lastErr || "module failed"}`);
-
-    const { FilesetResolver, FaceDetector } = mod;
+    const { FilesetResolver } = mod;
     let vision = null;
     for (const wasmUrl of WASM_URLS) {
       try {
@@ -64,16 +69,29 @@ export class FaceAlgorithm {
       } catch {}
     }
     if (!vision) throw new Error("E_MODEL_LOAD: wasm failed");
+    return { mod, vision };
+  }
 
-    try {
+  async load(mode = "detector", onStatus) {
+    this.mode = mode;
+    const { mod, vision } = await this.#loadVision(onStatus);
+    if (mode === "landmarker") {
+      if (!this.landmarker) {
+        const { FaceLandmarker } = mod;
+        this.landmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: LANDMARKER_MODEL_URL, delegate: "GPU" },
+          runningMode: "VIDEO",
+          numFaces: 2,
+          outputFaceBlendshapes: true,
+          minFaceDetectionConfidence: this.minConfidence
+        });
+      }
+      return;
+    }
+    if (!this.detector) {
+      const { FaceDetector } = mod;
       this.detector = await FaceDetector.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
-        runningMode: "VIDEO",
-        minDetectionConfidence: this.minConfidence
-      });
-    } catch {
-      this.detector = await FaceDetector.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
+        baseOptions: { modelAssetPath: DETECTOR_MODEL_URL, delegate: "GPU" },
         runningMode: "VIDEO",
         minDetectionConfidence: this.minConfidence
       });
@@ -86,91 +104,58 @@ export class FaceAlgorithm {
 
   reset() {
     this.tracks.clear();
-    this.lastSeenTs.clear();
+    this.seen.clear();
     this.nextId = 1;
     this.lastLatencyMs = 0;
     this.avgLatencyMs = 0;
+    this.lastEventTs = 0;
   }
 
-  detect(video, tsMs, options = {}) {
-    if (!this.detector) return [];
-    const {
-      smoothFactor = 0.22,
-      ttlMs = 300,
-      minBoxSize = 20,
-      mode = "single",
-      lockId = null,
-      iouThreshold = 0.2
-    } = options;
-
-    const t0 = performance.now();
-    const result = this.detector.detectForVideo(video, tsMs);
-    this.lastLatencyMs = performance.now() - t0;
-    this.avgLatencyMs = this.avgLatencyMs === 0 ? this.lastLatencyMs : this.avgLatencyMs * 0.9 + this.lastLatencyMs * 0.1;
-
-    const vw = video.videoWidth || 1;
-    const vh = video.videoHeight || 1;
+  #associate(raw, options) {
+    const { smoothFactor = 0.22, ttlMs = 300, mode = "single", lockId = null, iouThreshold = 0.2 } = options;
     const now = performance.now();
+    const entries = [...this.tracks.entries()];
+    const used = new Set();
 
-    const detections = [];
-    for (const det of result.detections || []) {
-      const b = det.boundingBox;
-      const score = det.categories?.[0]?.score || 0;
-      if (!b || score < this.minConfidence || b.width < minBoxSize || b.height < minBoxSize) continue;
-      detections.push({
-        x: clamp(b.originX, 0, vw),
-        y: clamp(b.originY, 0, vh),
-        w: clamp(b.width, 1, vw),
-        h: clamp(b.height, 1, vh),
-        score,
-        keypoints: (det.keypoints || []).map((p) => ({ x: p.x * vw, y: p.y * vh }))
-      });
-    }
-
-    // IoU-based association (more stable than nearest-center in multi-face scenes).
-    const trackEntries = [...this.tracks.entries()];
-    const usedTrack = new Set();
-    for (const d of detections) {
+    for (const d of raw) {
       let bestId = null;
-      let bestIou = 0;
-      for (const [id, t] of trackEntries) {
-        if (usedTrack.has(id)) continue;
+      let best = 0;
+      for (const [id, t] of entries) {
+        if (used.has(id)) continue;
         const ov = iou(d, t);
-        if (ov > bestIou) {
-          bestIou = ov;
+        if (ov > best) {
+          best = ov;
           bestId = id;
         }
       }
-
-      if (bestId == null || bestIou < iouThreshold) {
+      if (bestId == null || best < iouThreshold) {
         bestId = this.nextId++;
         this.tracks.set(bestId, { ...d, id: bestId, scoreAvg: d.score });
       } else {
         const t = this.tracks.get(bestId);
-        // Dynamic smoothing: fast movement => lower smoothing, stable => higher smoothing.
-        const movement = Math.hypot((d.x + d.w / 2) - (t.x + t.w / 2), (d.y + d.h / 2) - (t.y + t.h / 2));
-        const adaptive = clamp(smoothFactor - movement / 400, 0.12, 0.35);
+        const move = Math.hypot((d.x + d.w / 2) - (t.x + t.w / 2), (d.y + d.h / 2) - (t.y + t.h / 2));
+        const adaptive = clamp(smoothFactor - move / 400, 0.12, 0.35);
         t.x = lerp(t.x, d.x, adaptive);
         t.y = lerp(t.y, d.y, adaptive);
         t.w = lerp(t.w, d.w, adaptive);
         t.h = lerp(t.h, d.h, adaptive);
         t.score = d.score;
         t.scoreAvg = t.scoreAvg * 0.9 + d.score * 0.1;
-        t.keypoints = d.keypoints;
+        t.keypoints = d.keypoints || [];
+        t.landmarks = d.landmarks || null;
       }
-      usedTrack.add(bestId);
-      this.lastSeenTs.set(bestId, now);
+      used.add(bestId);
+      this.seen.set(bestId, now);
     }
 
     for (const [id] of this.tracks) {
-      const seen = this.lastSeenTs.get(id) || 0;
-      if (now - seen > ttlMs) {
+      if (now - (this.seen.get(id) || 0) > ttlMs) {
         this.tracks.delete(id);
-        this.lastSeenTs.delete(id);
+        this.seen.delete(id);
       }
     }
 
-    let faces = [...this.tracks.values()].sort((a, b) => boxArea(b) - boxArea(a));
+    let faces = [...this.tracks.values()].sort((a, b) => area(b) - area(a));
     if (lockId != null) {
       const locked = faces.find((f) => f.id === lockId);
       faces = locked ? [locked] : [];
@@ -178,5 +163,83 @@ export class FaceAlgorithm {
       faces = faces.slice(0, 1);
     }
     return faces;
+  }
+
+  #eventsFromLandmarks(face) {
+    const lm = face?.landmarks;
+    if (!lm || lm.length < 309) return [];
+    const leftEAR = dist(lm[159], lm[145]) / Math.max(1e-6, dist(lm[33], lm[133]));
+    const rightEAR = dist(lm[386], lm[374]) / Math.max(1e-6, dist(lm[263], lm[362]));
+    const mouthOpen = dist(lm[13], lm[14]) / Math.max(1e-6, dist(lm[78], lm[308]));
+    const events = [];
+    const now = performance.now();
+    if (now - this.lastEventTs > 350) {
+      if ((leftEAR + rightEAR) / 2 < 0.18) {
+        events.push("blink");
+        this.lastEventTs = now;
+      } else if (mouthOpen > 0.34) {
+        events.push("mouth_open");
+        this.lastEventTs = now;
+      }
+    }
+    return events;
+  }
+
+  detect(video, tsMs, options = {}) {
+    const {
+      minBoxSize = 20
+    } = options;
+    const t0 = performance.now();
+    let raw = [];
+
+    if (this.mode === "landmarker" && this.landmarker) {
+      const res = this.landmarker.detectForVideo(video, tsMs);
+      const vw = video.videoWidth || 1;
+      const vh = video.videoHeight || 1;
+      for (const landmarks of res.faceLandmarks || []) {
+        let minX = 1, minY = 1, maxX = 0, maxY = 0;
+        for (const p of landmarks) {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        }
+        const x = clamp(minX * vw, 0, vw);
+        const y = clamp(minY * vh, 0, vh);
+        const w = clamp((maxX - minX) * vw, 1, vw);
+        const h = clamp((maxY - minY) * vh, 1, vh);
+        if (w < minBoxSize || h < minBoxSize) continue;
+        raw.push({
+          x, y, w, h,
+          score: 0.9,
+          landmarks: landmarks.map((p) => ({ x: p.x * vw, y: p.y * vh })),
+          keypoints: []
+        });
+      }
+    } else if (this.detector) {
+      const res = this.detector.detectForVideo(video, tsMs);
+      const vw = video.videoWidth || 1;
+      const vh = video.videoHeight || 1;
+      for (const det of res.detections || []) {
+        const b = det.boundingBox;
+        const score = det.categories?.[0]?.score || 0;
+        if (!b || score < this.minConfidence || b.width < minBoxSize || b.height < minBoxSize) continue;
+        raw.push({
+          x: clamp(b.originX, 0, vw),
+          y: clamp(b.originY, 0, vh),
+          w: clamp(b.width, 1, vw),
+          h: clamp(b.height, 1, vh),
+          score,
+          keypoints: (det.keypoints || []).map((p) => ({ x: p.x * vw, y: p.y * vh })),
+          landmarks: null
+        });
+      }
+    }
+
+    this.lastLatencyMs = performance.now() - t0;
+    this.avgLatencyMs = this.avgLatencyMs === 0 ? this.lastLatencyMs : this.avgLatencyMs * 0.9 + this.lastLatencyMs * 0.1;
+    const faces = this.#associate(raw, options);
+    const events = this.mode === "landmarker" ? this.#eventsFromLandmarks(faces[0]) : [];
+    return { faces, events };
   }
 }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -20,53 +20,61 @@
 
       <aside class="panel side">
         <h1>Face Tracker Pro</h1>
-        <p class="sub">本地识别 · 实时跟踪 · 极简科技风</p>
+        <p class="sub">Local only · Real-time tracking</p>
 
         <div class="toolbar">
           <button id="startBtn" class="btn-primary">Start (S)</button>
           <button id="stopBtn" disabled>Stop (X)</button>
-          <button id="debugBtn">Debug (D)</button>
-          <button id="themeBtn">Theme</button>
         </div>
 
-        <div class="actions compact">
-          <button id="shotBtn" disabled>截图</button>
-          <button id="exportBtn" disabled>导出JSON</button>
-        </div>
+        <details class="tools">
+          <summary>Tools</summary>
+          <div class="actions compact">
+            <button id="debugBtn">Debug (D)</button>
+            <button id="themeBtn">Theme</button>
+            <button id="shotBtn" disabled>Snapshot</button>
+            <button id="exportBtn" disabled>Export JSON</button>
+          </div>
+          <div class="grid">
+            <label>Mode
+              <select id="modeSelect">
+                <option value="single">Single</option>
+                <option value="multi">Multi</option>
+              </select>
+            </label>
+            <label>Model
+              <select id="modelSelect">
+                <option value="detector">BlazeFace Detector</option>
+                <option value="landmarker">Face Landmarker</option>
+              </select>
+            </label>
+            <label>Performance
+              <select id="perfSelect">
+                <option value="high">High</option>
+                <option value="balance" selected>Balance</option>
+                <option value="save">Save</option>
+              </select>
+            </label>
+            <label>Smooth
+              <input id="smoothRange" type="range" min="0.08" max="0.45" step="0.01" value="0.22" />
+            </label>
+            <label>Confidence
+              <input id="confRange" type="range" min="0.3" max="0.9" step="0.01" value="0.6" />
+            </label>
+            <label class="inline"><input id="kpToggle" type="checkbox" checked />Keypoints</label>
+            <label class="inline"><input id="privacyToggle" type="checkbox" checked />Privacy</label>
+          </div>
+          <div class="actions compact">
+            <button id="presetMeeting">Meeting</button>
+            <button id="presetSelfie">Selfie</button>
+            <button id="presetLow">Save Power</button>
+          </div>
+        </details>
 
-        <div class="grid">
-          <label>模式
-            <select id="modeSelect">
-              <option value="single">单人优先</option>
-              <option value="multi">多人显示</option>
-            </select>
-          </label>
-          <label>性能档位
-            <select id="perfSelect">
-              <option value="high">高性能</option>
-              <option value="balance" selected>均衡</option>
-              <option value="save">省电</option>
-            </select>
-          </label>
-          <label>平滑强度
-            <input id="smoothRange" type="range" min="0.08" max="0.45" step="0.01" value="0.22" />
-          </label>
-          <label>置信阈值
-            <input id="confRange" type="range" min="0.3" max="0.9" step="0.01" value="0.6" />
-          </label>
-          <label class="inline"><input id="kpToggle" type="checkbox" checked />显示关键点</label>
-          <label class="inline"><input id="privacyToggle" type="checkbox" checked />隐私模式</label>
-        </div>
-
-        <div class="actions compact">
-          <button id="presetMeeting">会议预设</button>
-          <button id="presetSelfie">自拍预设</button>
-          <button id="presetLow">省电预设</button>
-        </div>
-
-        <p class="state"><span>状态</span><strong id="statusText">Idle</strong></p>
-        <p class="state"><span>指标</span><strong id="metricsText">idle</strong></p>
-        <p class="state"><span>质量</span><strong id="qualityText">waiting</strong></p>
+        <p class="state"><span>Status</span><strong id="statusText">Idle</strong></p>
+        <p class="state"><span>Metrics</span><strong id="metricsText">idle</strong></p>
+        <p class="state"><span>Quality</span><strong id="qualityText">waiting</strong></p>
+        <p class="state"><span>Events</span><strong id="eventText">none</strong></p>
       </aside>
     </main>
     <script type="module" src="./app.js"></script>

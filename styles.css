@@ -62,8 +62,23 @@ h1 { margin: 0; font-size: 1.2rem; letter-spacing: 0.02em; }
 .toolbar {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: 1.25fr 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+.tools {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(9, 16, 30, 0.45);
+}
+.tools > summary {
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+}
+.tools[open] > summary {
+  margin-bottom: 8px;
 }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .actions.compact button { flex: 1 1 0; min-width: 0; }
