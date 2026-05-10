@@ -1,26 +1,32 @@
-﻿const MODULE_URLS = [
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs",
-  "https://unpkg.com/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs"
+const VISION_VERSION = "0.10.35";
+
+const MODULE_URLS = [
+  `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/vision_bundle.mjs`,
+  `https://unpkg.com/@mediapipe/tasks-vision@${VISION_VERSION}/vision_bundle.mjs`
 ];
 
 const WASM_URLS = [
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm",
-  "https://unpkg.com/@mediapipe/tasks-vision@0.10.35/wasm"
+  `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`,
+  `https://unpkg.com/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`
 ];
 
 const LANDMARKER_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
 
-function clamp(v, min, max) {
-  return Math.max(min, Math.min(max, v));
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
-function boxArea(b) {
-  return Math.max(0, b.w) * Math.max(0, b.h);
+function boxArea(box) {
+  return Math.max(0, box.w) * Math.max(0, box.h);
+}
+
+function center(box) {
+  return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
 }
 
 function iou(a, b) {
@@ -30,16 +36,19 @@ function iou(a, b) {
   const y2 = Math.min(a.y + a.h, b.y + b.h);
   const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   if (inter <= 0) return 0;
-  return inter / (boxArea(a) + boxArea(b) - inter);
+  return inter / Math.max(1, boxArea(a) + boxArea(b) - inter);
 }
 
-function expandBox(x, y, w, h, vw, vh, scale = 1.38) {
+function expandBox(x, y, w, h, vw, vh) {
   const cx = x + w / 2;
   const cy = y + h / 2;
+  const faceRatio = (w * h) / Math.max(1, vw * vh);
+  const scale = clamp(1.42 - faceRatio * 0.22, 1.28, 1.5);
+  const verticalBias = h * 0.03;
   const nw = w * scale;
-  const nh = h * scale;
+  const nh = h * (scale + 0.04);
   const nx = clamp(cx - nw / 2, 0, vw);
-  const ny = clamp(cy - nh / 2, 0, vh);
+  const ny = clamp(cy - nh / 2 - verticalBias, 0, vh);
   return {
     x: nx,
     y: ny,
@@ -48,17 +57,23 @@ function expandBox(x, y, w, h, vw, vh, scale = 1.38) {
   };
 }
 
-function dist(a, b) {
+function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function blendBox(target, raw, alpha) {
+  target.x = lerp(target.x, raw.x, alpha);
+  target.y = lerp(target.y, raw.y, alpha);
+  target.w = lerp(target.w, raw.w, alpha);
+  target.h = lerp(target.h, raw.h, alpha);
 }
 
 export class FaceAlgorithm {
   constructor() {
     this.landmarker = null;
     this.tracks = new Map();
-    this.seen = new Map();
     this.nextId = 1;
-    this.minConfidence = 0.45;
+    this.minConfidence = 0.42;
     this.lastLatencyMs = 0;
     this.avgLatencyMs = 0;
     this.lastEventTs = 0;
@@ -69,14 +84,14 @@ export class FaceAlgorithm {
     let lastError = null;
     for (const url of MODULE_URLS) {
       try {
-        onStatus?.(`鍔犺浇寮曟搸: ${new URL(url).host}`);
+        onStatus?.(`加载引擎 ${new URL(url).host}`);
         mod = await import(url);
         break;
-      } catch (err) {
-        lastError = err;
+      } catch (error) {
+        lastError = error;
       }
     }
-    if (!mod) throw new Error(`E_MODEL_LOAD: ${lastError?.message || lastError || "module failed"}`);
+    if (!mod) throw new Error(`模型加载失败：${lastError?.message || lastError || "module failed"}`);
 
     const { FilesetResolver } = mod;
     let vision = null;
@@ -86,7 +101,7 @@ export class FaceAlgorithm {
         break;
       } catch {}
     }
-    if (!vision) throw new Error("E_MODEL_LOAD: wasm failed");
+    if (!vision) throw new Error("WASM 加载失败");
     return { mod, vision };
   }
 
@@ -95,68 +110,109 @@ export class FaceAlgorithm {
     const { mod, vision } = await this.#loadVision(onStatus);
     const { FaceLandmarker } = mod;
     this.landmarker = await FaceLandmarker.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: LANDMARKER_MODEL_URL, delegate: "GPU" },
+      baseOptions: {
+        modelAssetPath: LANDMARKER_MODEL_URL,
+        delegate: "GPU"
+      },
       runningMode: "VIDEO",
       numFaces: 1,
       outputFaceBlendshapes: true,
-      minFaceDetectionConfidence: this.minConfidence
+      minFaceDetectionConfidence: this.minConfidence,
+      minFacePresenceConfidence: Math.max(0.35, this.minConfidence - 0.08),
+      minTrackingConfidence: 0.35
     });
   }
 
-  setMinConfidence(v) {
-    this.minConfidence = clamp(v, 0.2, 0.95);
+  setMinConfidence(value) {
+    this.minConfidence = clamp(value, 0.25, 0.85);
   }
 
   reset() {
     this.tracks.clear();
-    this.seen.clear();
     this.nextId = 1;
     this.lastLatencyMs = 0;
     this.avgLatencyMs = 0;
     this.lastEventTs = 0;
   }
 
+  #matchTrack(rawFace, entries, used, iouThreshold) {
+    let bestId = null;
+    let bestScore = -Infinity;
+    const rawCenter = center(rawFace);
+
+    for (const [id, track] of entries) {
+      if (used.has(id)) continue;
+      const overlap = iou(rawFace, track);
+      const trackCenter = center(track);
+      const centerGap = distance(rawCenter, trackCenter);
+      const size = Math.max(rawFace.w, rawFace.h, track.w, track.h, 1);
+      const proximity = 1 - clamp(centerGap / (size * 1.1), 0, 1);
+      const score = overlap * 0.7 + proximity * 0.3;
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = id;
+      }
+    }
+
+    return bestScore >= iouThreshold ? bestId : null;
+  }
+
   #track(rawFaces, options) {
-    const { smoothFactor = 0.45, ttlMs = 260, iouThreshold = 0.15 } = options;
+    const { followSpeed = 0.78, ttlMs = 300, iouThreshold = 0.11 } = options;
     const now = performance.now();
     const entries = [...this.tracks.entries()];
     const used = new Set();
 
-    for (const f of rawFaces) {
-      let bestId = null;
-      let bestIou = 0;
-      for (const [id, t] of entries) {
-        if (used.has(id)) continue;
-        const ov = iou(f, t);
-        if (ov > bestIou) {
-          bestIou = ov;
-          bestId = id;
-        }
+    for (const raw of rawFaces) {
+      let id = this.#matchTrack(raw, entries, used, iouThreshold);
+      if (id == null) {
+        id = this.nextId++;
+        this.tracks.set(id, {
+          ...raw,
+          id,
+          vx: 0,
+          vy: 0,
+          vw: 0,
+          vh: 0,
+          jitter: 0,
+          scoreAvg: raw.score,
+          lastSeen: now
+        });
+      } else {
+        const track = this.tracks.get(id);
+        const old = { x: track.x, y: track.y, w: track.w, h: track.h };
+        const oldCenter = center(track);
+        const rawCenter = center(raw);
+        const movement = distance(rawCenter, oldCenter);
+        const size = Math.max(track.w, track.h, 1);
+        const movementRatio = clamp(movement / size, 0, 1.4);
+        const confidenceBoost = clamp(raw.score, 0.35, 1) * 0.14;
+        const alpha = clamp(followSpeed * 0.56 + movementRatio * 0.42 + confidenceBoost, 0.42, 0.94);
+
+        blendBox(track, raw, alpha);
+        track.vx = track.x - old.x;
+        track.vy = track.y - old.y;
+        track.vw = track.w - old.w;
+        track.vh = track.h - old.h;
+        track.jitter = movement;
+        track.score = raw.score;
+        track.scoreAvg = track.scoreAvg * 0.64 + raw.score * 0.36;
+        track.landmarks = raw.landmarks;
+        track.lastSeen = now;
+
+        const predict = clamp(movementRatio * 0.22, 0, 0.18);
+        track.x += track.vx * predict;
+        track.y += track.vy * predict;
+        track.w += track.vw * predict * 0.6;
+        track.h += track.vh * predict * 0.6;
       }
 
-      if (bestId == null || bestIou < iouThreshold) {
-        bestId = this.nextId++;
-        this.tracks.set(bestId, { ...f, id: bestId, scoreAvg: f.score });
-      } else {
-        const t = this.tracks.get(bestId);
-        const movement = Math.hypot((f.x + f.w / 2) - (t.x + t.w / 2), (f.y + f.h / 2) - (t.y + t.h / 2));
-        const alpha = clamp(smoothFactor + movement / 240, 0.35, 0.82);
-        t.x = lerp(t.x, f.x, alpha);
-        t.y = lerp(t.y, f.y, alpha);
-        t.w = lerp(t.w, f.w, alpha);
-        t.h = lerp(t.h, f.h, alpha);
-        t.score = f.score;
-        t.scoreAvg = t.scoreAvg * 0.75 + f.score * 0.25;
-        t.landmarks = f.landmarks;
-      }
-      used.add(bestId);
-      this.seen.set(bestId, now);
+      used.add(id);
     }
 
-    for (const [id] of this.tracks) {
-      if (now - (this.seen.get(id) || 0) > ttlMs) {
+    for (const [id, track] of this.tracks) {
+      if (now - (track.lastSeen || 0) > ttlMs) {
         this.tracks.delete(id);
-        this.seen.delete(id);
       }
     }
 
@@ -165,14 +221,20 @@ export class FaceAlgorithm {
 
   #extractEvents(face) {
     const lm = face?.landmarks;
-    if (!lm || lm.length < 309) return [];
+    if (!lm || lm.length < 386) return [];
 
-    const leftEAR = dist(lm[159], lm[145]) / Math.max(1e-6, dist(lm[33], lm[133]));
-    const rightEAR = dist(lm[386], lm[374]) / Math.max(1e-6, dist(lm[263], lm[362]));
-    const mouthOpen = dist(lm[13], lm[14]) / Math.max(1e-6, dist(lm[78], lm[308]));
+    const leftEAR = distance(lm[159], lm[145]) / Math.max(1e-6, distance(lm[33], lm[133]));
+    const rightEAR = distance(lm[386], lm[374]) / Math.max(1e-6, distance(lm[263], lm[362]));
+    const mouthOpen = distance(lm[13], lm[14]) / Math.max(1e-6, distance(lm[78], lm[308]));
+    const nose = lm[1];
+    const left = lm[234];
+    const right = lm[454];
+    const faceWidth = Math.max(1e-6, distance(left, right));
+    const yawOffset = Math.abs((nose.x - (left.x + right.x) / 2) / faceWidth);
 
     const now = performance.now();
-    if (now - this.lastEventTs <= 350) return [];
+    if (now - this.lastEventTs <= 320) return [];
+
     if ((leftEAR + rightEAR) / 2 < 0.18) {
       this.lastEventTs = now;
       return ["blink"];
@@ -181,54 +243,65 @@ export class FaceAlgorithm {
       this.lastEventTs = now;
       return ["mouth_open"];
     }
+    if (yawOffset > 0.14) {
+      this.lastEventTs = now;
+      return ["turn"];
+    }
     return [];
   }
 
-  detect(video, tsMs, options = {}) {
-    const { minBoxSize = 8 } = options;
+  detect(video, timestampMs, options = {}) {
+    const { minBoxSize = 7 } = options;
     const vw = video.videoWidth || 1;
     const vh = video.videoHeight || 1;
-    const t0 = performance.now();
-    const raw = [];
+    const start = performance.now();
+    const rawFaces = [];
 
     if (this.landmarker) {
-      const res = this.landmarker.detectForVideo(video, tsMs);
-      const blendshapes = res.faceBlendshapes || [];
-      for (let i = 0; i < (res.faceLandmarks || []).length; i += 1) {
-        const landmarks = res.faceLandmarks[i];
+      const result = this.landmarker.detectForVideo(video, timestampMs);
+      const blendshapes = result.faceBlendshapes || [];
+
+      for (let i = 0; i < (result.faceLandmarks || []).length; i += 1) {
+        const landmarks = result.faceLandmarks[i];
         let minX = 1;
         let minY = 1;
         let maxX = 0;
         let maxY = 0;
-        for (const p of landmarks) {
-          if (p.x < minX) minX = p.x;
-          if (p.y < minY) minY = p.y;
-          if (p.x > maxX) maxX = p.x;
-          if (p.y > maxY) maxY = p.y;
+
+        for (const point of landmarks) {
+          minX = Math.min(minX, point.x);
+          minY = Math.min(minY, point.y);
+          maxX = Math.max(maxX, point.x);
+          maxY = Math.max(maxY, point.y);
         }
+
         let x = minX * vw;
         let y = minY * vh;
         let w = (maxX - minX) * vw;
         let h = (maxY - minY) * vh;
         ({ x, y, w, h } = expandBox(x, y, w, h, vw, vh));
         if (w < minBoxSize || h < minBoxSize) continue;
+
         const categories = blendshapes[i]?.categories || [];
-        const presence = categories.find((c) => (c.categoryName || "").toLowerCase().includes("presence"))?.score;
-        raw.push({
+        const presence = categories.find((item) => (item.categoryName || "").toLowerCase().includes("presence"))?.score;
+        const score = typeof presence === "number" ? clamp(presence, 0, 1) : 0.88;
+        if (score < this.minConfidence - 0.12) continue;
+
+        rawFaces.push({
           x,
           y,
           w,
           h,
-          score: typeof presence === "number" ? clamp(presence, 0, 1) : 0.88,
-          landmarks: landmarks.map((p) => ({ x: p.x * vw, y: p.y * vh }))
+          score,
+          landmarks: landmarks.map((point) => ({ x: point.x * vw, y: point.y * vh }))
         });
       }
     }
 
-    this.lastLatencyMs = performance.now() - t0;
-    this.avgLatencyMs = this.avgLatencyMs === 0 ? this.lastLatencyMs : this.avgLatencyMs * 0.9 + this.lastLatencyMs * 0.1;
+    this.lastLatencyMs = performance.now() - start;
+    this.avgLatencyMs = this.avgLatencyMs === 0 ? this.lastLatencyMs : this.avgLatencyMs * 0.88 + this.lastLatencyMs * 0.12;
 
-    const faces = this.#track(raw, options);
+    const faces = this.#track(rawFaces, options);
     const events = this.#extractEvents(faces[0]);
     return { faces, events };
   }
