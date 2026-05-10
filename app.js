@@ -103,10 +103,15 @@ function getCoverTransform() {
 
 function mapFaceToCanvas(face) {
   const { scale, offsetX, offsetY } = getCoverTransform();
+  const w = face.w * scale;
+  let x = face.x * scale + offsetX;
+  if (els.mirrorToggle.checked) {
+    x = (els.overlay.clientWidth || 1) - x - w;
+  }
   return {
-    x: face.x * scale + offsetX,
+    x,
     y: face.y * scale + offsetY,
-    w: face.w * scale,
+    w,
     h: face.h * scale
   };
 }

@@ -137,8 +137,7 @@ h2 {
   object-fit: cover;
 }
 
-.mirrored #video,
-.mirrored #overlay {
+.mirrored #video {
   transform: scaleX(-1);
 }
 

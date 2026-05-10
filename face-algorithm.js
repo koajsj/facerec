@@ -61,6 +61,25 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function estimateFaceScore(bounds, vw, vh) {
+  const { minX, minY, maxX, maxY } = bounds;
+  const width = Math.max(0, maxX - minX);
+  const height = Math.max(0, maxY - minY);
+  const areaRatio = (width * height) / Math.max(1, vw * vh);
+  const cx = minX + width / 2;
+  const cy = minY + height / 2;
+  const centerGap = Math.hypot(cx / vw - 0.5, cy / vh - 0.5);
+  const edgeMargin = Math.min(minX, minY, vw - maxX, vh - maxY) / Math.max(1, Math.min(vw, vh));
+  const aspect = height / Math.max(1, width);
+
+  const sizeScore = Math.min(clamp((areaRatio - 0.012) / 0.09, 0, 1), clamp((0.62 - areaRatio) / 0.3, 0, 1));
+  const centerScore = 1 - clamp(centerGap / 0.58, 0, 1);
+  const edgeScore = clamp((edgeMargin + 0.04) / 0.12, 0, 1);
+  const aspectScore = 1 - clamp(Math.abs(aspect - 1.28) / 0.9, 0, 1);
+
+  return clamp(0.28 + sizeScore * 0.26 + centerScore * 0.18 + edgeScore * 0.2 + aspectScore * 0.16, 0.24, 0.99);
+}
+
 function blendBox(target, raw, alpha) {
   target.x = lerp(target.x, raw.x, alpha);
   target.y = lerp(target.y, raw.y, alpha);
@@ -116,7 +135,7 @@ export class FaceAlgorithm {
       },
       runningMode: "VIDEO",
       numFaces: 1,
-      outputFaceBlendshapes: true,
+      outputFaceBlendshapes: false,
       minFaceDetectionConfidence: this.minConfidence,
       minFacePresenceConfidence: Math.max(0.35, this.minConfidence - 0.08),
       minTrackingConfidence: 0.35
@@ -195,8 +214,8 @@ export class FaceAlgorithm {
         track.vw = track.w - old.w;
         track.vh = track.h - old.h;
         track.jitter = movement;
-        track.score = raw.score;
-        track.scoreAvg = track.scoreAvg * 0.64 + raw.score * 0.36;
+        track.score = clamp(raw.score - movementRatio * 0.12, 0.2, 1);
+        track.scoreAvg = track.scoreAvg * 0.7 + track.score * 0.3;
         track.landmarks = raw.landmarks;
         track.lastSeen = now;
 
@@ -259,7 +278,6 @@ export class FaceAlgorithm {
 
     if (this.landmarker) {
       const result = this.landmarker.detectForVideo(video, timestampMs);
-      const blendshapes = result.faceBlendshapes || [];
 
       for (let i = 0; i < (result.faceLandmarks || []).length; i += 1) {
         const landmarks = result.faceLandmarks[i];
@@ -279,12 +297,10 @@ export class FaceAlgorithm {
         let y = minY * vh;
         let w = (maxX - minX) * vw;
         let h = (maxY - minY) * vh;
+        const score = estimateFaceScore({ minX: x, minY: y, maxX: x + w, maxY: y + h }, vw, vh);
         ({ x, y, w, h } = expandBox(x, y, w, h, vw, vh));
         if (w < minBoxSize || h < minBoxSize) continue;
 
-        const categories = blendshapes[i]?.categories || [];
-        const presence = categories.find((item) => (item.categoryName || "").toLowerCase().includes("presence"))?.score;
-        const score = typeof presence === "number" ? clamp(presence, 0, 1) : 0.88;
         if (score < this.minConfidence - 0.12) continue;
 
         rawFaces.push({
