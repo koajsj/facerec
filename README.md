@@ -43,10 +43,10 @@
 ## 本地运行
 
 ```powershell
-cd C:\Users\Administrator\Desktop\github\人脸识别
+cd C:\Users\Administrator\Desktop\github\face-tracker
 powershell -ExecutionPolicy Bypass -File .\scripts\sync.ps1
 
-cd C:\Users\Administrator\Desktop\github\人脸识别\local-dev
+cd C:\Users\Administrator\Desktop\github\face-tracker\local-dev
 py -m http.server 5600
 ```
 

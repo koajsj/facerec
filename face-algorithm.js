@@ -124,15 +124,18 @@ export class FaceAlgorithm {
     return { mod, vision };
   }
 
-  async load(onStatus) {
-    if (this.landmarker) return;
-    const { mod, vision } = await this.#loadVision(onStatus);
+  async #createLandmarker(mod, vision, delegate) {
     const { FaceLandmarker } = mod;
-    this.landmarker = await FaceLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: LANDMARKER_MODEL_URL,
-        delegate: "GPU"
-      },
+    const baseOptions = {
+      modelAssetPath: LANDMARKER_MODEL_URL
+    };
+
+    if (delegate) {
+      baseOptions.delegate = delegate;
+    }
+
+    return FaceLandmarker.createFromOptions(vision, {
+      baseOptions,
       runningMode: "VIDEO",
       numFaces: 1,
       outputFaceBlendshapes: false,
@@ -140,6 +143,24 @@ export class FaceAlgorithm {
       minFacePresenceConfidence: Math.max(0.35, this.minConfidence - 0.08),
       minTrackingConfidence: 0.35
     });
+  }
+
+  async load(onStatus) {
+    if (this.landmarker) return;
+    const { mod, vision } = await this.#loadVision(onStatus);
+    const attempts = ["GPU", "CPU", null];
+    let lastError = null;
+
+    for (const delegate of attempts) {
+      try {
+        this.landmarker = await this.#createLandmarker(mod, vision, delegate);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw new Error(`人脸识别初始化失败：${lastError?.message || lastError || "createFromOptions failed"}`);
   }
 
   setMinConfidence(value) {
@@ -240,7 +261,7 @@ export class FaceAlgorithm {
 
   #extractEvents(face) {
     const lm = face?.landmarks;
-    if (!lm || lm.length < 386) return [];
+    if (!lm || lm.length <= 454) return [];
 
     const leftEAR = distance(lm[159], lm[145]) / Math.max(1e-6, distance(lm[33], lm[133]));
     const rightEAR = distance(lm[386], lm[374]) / Math.max(1e-6, distance(lm[263], lm[362]));
